@@ -1,0 +1,6 @@
+{
+  "name": "Washi Tape 3D",
+  "description": "An interactive 3D homepage with realistic paper tape rolling and continuous trailing mechanics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
