@@ -8,36 +8,29 @@
       (function() {
         const OriginalWebSocket = window.WebSocket;
         window.WebSocket = function(url, protocols) {
-          const isViteHMR = protocols === 'vite-hmr' || 
-                            (typeof protocols === 'string' && protocols.includes('vite-hmr')) || 
-                            (Array.isArray(protocols) && protocols.includes('vite-hmr')) ||
-                            (typeof url === 'string' && url.includes('vite'));
-          if (isViteHMR) {
-            console.log('[Washi Studio] Safely intercepted Vite HMR WebSocket to disable idle auto-reloads.');
-            // Return a persistent dummy WebSocket object that never fires 'close' or 'error' events,
-            // bypassing Vite's automatic full-page reload handler upon network disconnect.
-            const mockWS = {
-              url: url,
-              readyState: 1, // OPEN
-              send: function() {},
-              close: function() {},
-              addEventListener: function(event, callback) {
-                if (event === 'open') {
-                  setTimeout(() => {
-                    try { callback({ type: 'open' }); } catch(e) {}
-                  }, 5);
-                }
-              },
-              removeEventListener: function() {},
-              dispatchEvent: function() { return true; },
-              onopen: null,
-              onclose: null,
-              onerror: null,
-              onmessage: null
-            };
-            return mockWS;
-          }
-          return new OriginalWebSocket(url, protocols);
+          console.log('[Washi Studio] Safely intercepted WebSocket connection to prevent idle auto-reloads.', url);
+          // Return a persistent dummy WebSocket object that never fires 'close' or 'error' events,
+          // bypassing Vite's automatic full-page reload handler upon network disconnect.
+          const mockWS = {
+            url: url,
+            readyState: 1, // OPEN
+            send: function() {},
+            close: function() {},
+            addEventListener: function(event, callback) {
+              if (event === 'open') {
+                setTimeout(() => {
+                  try { callback({ type: 'open' }); } catch(e) {}
+                }, 5);
+              }
+            },
+            removeEventListener: function() {},
+            dispatchEvent: function() { return true; },
+            onopen: null,
+            onclose: null,
+            onerror: null,
+            onmessage: null
+          };
+          return mockWS;
         };
         // Copy static WebSocket constants/properties
         Object.getOwnPropertyNames(OriginalWebSocket).forEach(prop => {

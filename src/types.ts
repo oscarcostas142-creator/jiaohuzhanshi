@@ -20,8 +20,8 @@ export interface PathPoint {
 }
 
 export const COLORS = {
-  deskColor: '#F3EFEB',
-  tapeBaseColor: '#FCFAF7',
+  deskColor: '#EAEAEA',
+  tapeBaseColor: '#F4F4F6',
   stampRed: '#C83C3C',
   stampBlack: '#2C2C2C',
 };

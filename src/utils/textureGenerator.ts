@@ -882,47 +882,21 @@ export function generateRollSideTexture(baseColor: string): HTMLCanvasElement {
   const cx = canvas.width / 2;
   const cy = canvas.height / 2;
 
-  // Background is warm beige cardboard/paper core
-  ctx.fillStyle = '#E5DEC9';
+  // Background is cool grey-white cardboard/paper core
+  ctx.fillStyle = '#EBECEF';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Draw concentric rings from radius 180px out to 256px (the outer tape wound area)
-  // Inside 180px is the cardboard ring core
-  ctx.fillStyle = '#CBBF9D'; // Darker ring for the inner cardboard edge
-  ctx.beginPath();
-  ctx.arc(cx, cy, 180, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = '#E5DEC9'; // Back to cardboard center
-  ctx.beginPath();
-  ctx.arc(cx, cy, 168, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Draw cardboard fibers in the core circle
-  ctx.strokeStyle = 'rgba(130, 110, 80, 0.15)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i < 200; i++) {
-    const r = Math.random() * 168;
-    const theta = Math.random() * Math.PI * 2;
-    const px = cx + Math.cos(theta) * r;
-    const py = cy + Math.sin(theta) * r;
-    ctx.beginPath();
-    ctx.moveTo(px, py);
-    ctx.lineTo(px + (Math.random() - 0.5) * 8, py + (Math.random() - 0.5) * 8);
-    ctx.stroke();
-  }
-
-  // Draw the wound paper tape layers (radii 180px to 256px)
+  // Draw the wound paper tape layers (radii 76px to 256px)
   // Fill the outer ring with a color close to the tape's base pattern color
   ctx.fillStyle = baseColor;
   ctx.beginPath();
   ctx.arc(cx, cy, 256, 0, Math.PI * 2);
-  ctx.arc(cx, cy, 180, 0, Math.PI * 2, true); // Hole cut
+  ctx.arc(cx, cy, 76, 0, Math.PI * 2, true); // Hole cut
   ctx.fill();
 
   // Draw closely spaced concentric circles representing individual layers
   ctx.lineWidth = 2.4; // Thicker lines for more pronounced layers!
-  for (let r = 180; r <= 256; r += 3.2) { // 3.2px spacing instead of 1.8px spacing makes layers look much thicker!
+  for (let r = 76; r <= 256; r += 3.2) { // 3.2px spacing instead of 1.8px spacing makes layers look much thicker!
     // Add minor variation in color to simulate layers of wound tape and shadows
     const opacity = 0.18 + Math.sin(r * 2.5) * 0.08 + Math.random() * 0.04;
     ctx.strokeStyle = `rgba(0, 0, 0, ${opacity})`;
@@ -945,7 +919,7 @@ export function generateRollSideTexture(baseColor: string): HTMLCanvasElement {
   ctx.lineWidth = 1;
   for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 180) {
     if (Math.random() > 0.4) {
-      const startR = 180 + Math.random() * 20;
+      const startR = 76 + Math.random() * 20;
       const endR = 256 - Math.random() * 10;
       ctx.beginPath();
       ctx.moveTo(cx + Math.cos(angle) * startR, cy + Math.sin(angle) * startR);
@@ -1060,16 +1034,16 @@ export function generateDeskTexture(material: DeskMaterial): HTMLCanvasElement {
     }
 
     case 'cream_matte': {
-      // Soft luxury cream paperboard feel
-      ctx.fillStyle = '#F3EFEB';
+      // Clean sleek industrial matte gray paperboard feel
+      ctx.fillStyle = '#EAEAEA';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Add fine speckles/cardboard fiber spots
-      ctx.fillStyle = 'rgba(150, 140, 130, 0.08)';
+      // Add fine speckles/cardboard fiber spots for authentic texture depth
+      ctx.fillStyle = 'rgba(120, 120, 120, 0.12)';
       for (let i = 0; i < 3000; i++) {
         const x = Math.random() * canvas.width;
         const y = Math.random() * canvas.height;
-        const r = Math.random() * 1.5 + 0.3;
+        const r = Math.random() * 1.3 + 0.3;
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
@@ -1106,6 +1080,184 @@ export function generateDeskTexture(material: DeskMaterial): HTMLCanvasElement {
       break;
     }
   }
+
+  return canvas;
+}
+
+/**
+ * Generates a high-frequency procedural bump/displacement map for the side of the tape.
+ * Simulates micro-height differences between wound tape layers, paper fibers, and blade cut marks.
+ */
+export function generateRollSideBumpMap(): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return canvas;
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+
+  // Medium gray base represents neutral surface height (128/255)
+  ctx.fillStyle = '#808080';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Concentric spiral wound layers
+  for (let r = 76; r <= 256; r += 3.2) {
+    // Alternate dark and light concentric ridges to simulate wound tape physical depth
+    const heightVar = Math.sin(r * 2.5) * 45 + (Math.random() - 0.5) * 20;
+    const colorVal = Math.min(255, Math.max(0, 128 + Math.round(heightVar)));
+    ctx.strokeStyle = `rgb(${colorVal}, ${colorVal}, ${colorVal})`;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Radial slice/blade cut micro-indentations (dark cuts)
+  ctx.strokeStyle = '#4A4A4A';
+  ctx.lineWidth = 1;
+  for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 150) {
+    if (Math.random() > 0.3) {
+      const startR = 76 + Math.random() * 15;
+      const endR = 256 - Math.random() * 5;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(angle) * startR, cy + Math.sin(angle) * startR);
+      ctx.lineTo(cx + Math.cos(angle) * endR, cy + Math.sin(angle) * endR);
+      ctx.stroke();
+    }
+  }
+
+  // Draw high-frequency micro-fiber noise for authentic paper/felt feel on the side
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imgData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const px = (i / 4) % canvas.width;
+    const py = Math.floor((i / 4) / canvas.width);
+    const dx = px - cx;
+    const dy = py - cy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist <= 256) {
+      // Add fine grain/paper texture noise
+      const noise = (Math.random() - 0.5) * 24;
+      data[i] = Math.min(255, Math.max(0, data[i] + noise));
+      data[i+1] = Math.min(255, Math.max(0, data[i+1] + noise));
+      data[i+2] = Math.min(255, Math.max(0, data[i+2] + noise));
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  return canvas;
+}
+
+/**
+ * Generates a procedural roughness map for the side of the tape.
+ * Concentric layers and fiber cuts scatter light differently to avoid flat glossy reflection.
+ */
+export function generateRollSideRoughnessMap(): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return canvas;
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+
+  // Base roughness is high (rough, matte cardboard) -> ~0.8 roughness (#CCCCCC)
+  ctx.fillStyle = '#CCCCCC';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Inner cardboard core (dist < 76) is super rough and matte (0.95 roughness -> #FAF0E0)
+  ctx.fillStyle = '#E5E5E5';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 76, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tape wound layers have varying semi-gloss/matte boundaries
+  for (let r = 76; r <= 256; r += 3.2) {
+    // Roughness variations between 0.65 and 0.85
+    const rVal = Math.round(165 + Math.random() * 50);
+    ctx.strokeStyle = `rgb(${rVal}, ${rVal}, ${rVal})`;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Radial blade slice cuts are highly scattering/rough (matte #F0F0F0)
+  ctx.strokeStyle = '#E0E0E0';
+  ctx.lineWidth = 1;
+  for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 120) {
+    if (Math.random() > 0.4) {
+      const startR = 76 + Math.random() * 20;
+      const endR = 256 - Math.random() * 5;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(angle) * startR, cy + Math.sin(angle) * startR);
+      ctx.lineTo(cx + Math.cos(angle) * endR, cy + Math.sin(angle) * endR);
+      ctx.stroke();
+    }
+  }
+
+  return canvas;
+}
+
+/**
+ * Generates a high-quality, realistic kraft cardboard tube texture for the inner paper core.
+ * Features diagonal wound paper board seams, fiber speckles, and heavy matte micro-grain.
+ */
+export function generateCardboardCoreTexture(): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return canvas;
+
+  // Cool grey-white paperboard base color
+  ctx.fillStyle = '#EBECEF';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Cardboard fiber specks (unbleached recycled wood pulp spots in light grey)
+  ctx.fillStyle = 'rgba(100, 100, 100, 0.08)';
+  for (let i = 0; i < 400; i++) {
+    const rx = Math.random() * canvas.width;
+    const ry = Math.random() * canvas.height;
+    const rw = 1 + Math.random() * 2.5;
+    const rh = 1 + Math.random() * 1.5;
+    ctx.fillRect(rx, ry, rw, rh);
+  }
+
+  // Beautiful diagonal paper-winding seam lines typical of industrial cardboard tubes
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.05)';
+  ctx.lineWidth = 1.5;
+  for (let x = -canvas.width; x < canvas.width * 2; x += 128) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x + canvas.width / 2, canvas.height);
+    ctx.stroke();
+
+    // High-edge white highlight right next to the dark indentation seam to provide 3D relief
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.lineWidth = 1.0;
+    ctx.beginPath();
+    ctx.moveTo(x + 1.5, 0);
+    ctx.lineTo(x + canvas.width / 2 + 1.5, canvas.height);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.05)';
+    ctx.lineWidth = 1.5;
+  }
+
+  // Dense, fine noise grain to give it a rich tactile paperboard look
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imgData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const noise = (Math.random() - 0.5) * 8;
+    data[i] = Math.min(255, Math.max(0, data[i] + noise));
+    data[i+1] = Math.min(255, Math.max(0, data[i+1] + noise));
+    data[i+2] = Math.min(255, Math.max(0, data[i+2] + noise));
+  }
+  ctx.putImageData(imgData, 0, 0);
 
   return canvas;
 }

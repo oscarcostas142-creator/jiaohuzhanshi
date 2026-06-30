@@ -5,6 +5,9 @@ import {
   generateTapePattern,
   generateTapeBumpMap,
   generateRollSideTexture,
+  generateRollSideBumpMap,
+  generateRollSideRoughnessMap,
+  generateCardboardCoreTexture,
   generateDeskTexture,
 } from '../utils/textureGenerator';
 
@@ -37,7 +40,7 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
   // Refs for scene interaction
   const mouse = useRef(new THREE.Vector2());
   const isDragging = useRef(false);
-  const targetPos = useRef(new THREE.Vector3(1.5, 0, -0.5));
+  const targetPos = useRef(new THREE.Vector3(0, 0, 0));
   const lastPathPointRef = useRef<THREE.Vector3 | null>(null);
 
   // Arrays to hold path data
@@ -58,6 +61,9 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
   const rollTapePatternTexRef = useRef<THREE.CanvasTexture | null>(null); // Separate high-fidelity texture for the rolling cylinder
   const tapeBumpTexRef = useRef<THREE.CanvasTexture | null>(null);
   const rollSideTexRef = useRef<THREE.CanvasTexture | null>(null);
+  const rollSideBumpTexRef = useRef<THREE.CanvasTexture | null>(null);
+  const rollSideRoughnessTexRef = useRef<THREE.CanvasTexture | null>(null);
+  const cardboardCoreTexRef = useRef<THREE.CanvasTexture | null>(null);
   const deskTexRef = useRef<THREE.CanvasTexture | null>(null);
 
   // Track active unrolled length for shrinking roll radius
@@ -65,8 +71,8 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
 
   // Configuration Constants
   const DEFAULT_WIDTH = 0.6;
-  const INITIAL_RADIUS = 1.35; // 1.5x larger roll diameter
-  const CORE_RADIUS = 0.825; // 1.5x larger core diameter
+  const INITIAL_RADIUS = 1.0; // 1.0 Outer radius as requested
+  const CORE_RADIUS = 0.5; // 0.5 Inner radius as requested
   const TAPE_THICKNESS = 0.016; // 2x physical thickness
   const SLOPE_LIMIT = 0.004; // Double the slope limit for physical bridge consistency with 2x thickness
 
@@ -153,6 +159,35 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     sideTex.minFilter = THREE.LinearMipmapLinearFilter;
     rollSideTexRef.current = sideTex;
 
+    // Roll Side Bump Texture
+    const sideBumpCanvas = generateRollSideBumpMap();
+    if (rollSideBumpTexRef.current) {
+      rollSideBumpTexRef.current.dispose();
+    }
+    const sideBumpTex = new THREE.CanvasTexture(sideBumpCanvas);
+    sideBumpTex.minFilter = THREE.LinearMipmapLinearFilter;
+    rollSideBumpTexRef.current = sideBumpTex;
+
+    // Roll Side Roughness Texture
+    const sideRoughnessCanvas = generateRollSideRoughnessMap();
+    if (rollSideRoughnessTexRef.current) {
+      rollSideRoughnessTexRef.current.dispose();
+    }
+    const sideRoughnessTex = new THREE.CanvasTexture(sideRoughnessCanvas);
+    sideRoughnessTex.minFilter = THREE.LinearMipmapLinearFilter;
+    rollSideRoughnessTexRef.current = sideRoughnessTex;
+
+    // Cardboard Core Texture
+    if (!cardboardCoreTexRef.current) {
+      const cbCanvas = generateCardboardCoreTexture();
+      const cbTex = new THREE.CanvasTexture(cbCanvas);
+      cbTex.wrapS = THREE.RepeatWrapping;
+      cbTex.wrapT = THREE.RepeatWrapping;
+      cbTex.repeat.set(4, 1);
+      cbTex.minFilter = THREE.LinearMipmapLinearFilter;
+      cardboardCoreTexRef.current = cbTex;
+    }
+
     // 5. Desk Surface Texture
     const deskCanvas = generateDeskTexture(currentConfig.deskMaterial);
     if (deskTexRef.current) {
@@ -235,6 +270,13 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
           if (child.name === 'sideCapLeft' || child.name === 'sideCapRight') {
             const m = mat as THREE.MeshStandardMaterial;
             m.map = rollSideTexRef.current;
+            m.bumpMap = rollSideBumpTexRef.current;
+            m.bumpScale = 0.12; // Elevated 3D fiber depth
+            m.normalScale.set(2.5, 2.5); // Boost normal scale as requested to maximize torn weaving fiber texture
+            m.roughnessMap = rollSideRoughnessTexRef.current;
+            m.roughness = 0.95; // Matte rough paper side edge
+            m.metalness = 0.0; // Completely matte
+            m.color = new THREE.Color('#FFFFFF'); // Clean cool white / light cool grey tone
             m.needsUpdate = true;
             
             // Instantly sync physical offset of side caps
@@ -246,14 +288,33 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
             const m = mat as THREE.MeshStandardMaterial;
             if (rollTapePatternTexRef.current) {
               m.map = rollTapePatternTexRef.current;
+              m.emissive = new THREE.Color('#3a3a3a'); // Keeping pattern bright and clear without environmental dullness
+              m.emissiveMap = rollTapePatternTexRef.current;
+              m.bumpMap = tapeBumpTexRef.current;
+              m.bumpScale = 0.015; // Delicate micro-paper grain normal/bump simulation
+              m.normalScale.set(0.2, 0.2); // Weak normalScale for paper micro-grain
+              m.roughness = 0.88; // Dry matte paper feel
+              m.metalness = 0.0; // No plastic reflection
+              m.color = new THREE.Color('#FFFFFF'); // Clean cool white / light cool grey tone
               m.needsUpdate = true;
             }
             // Instantly sync physical scale of outer tube
             child.scale.z = config.width / DEFAULT_WIDTH;
           }
+          // Apply dry paperboard pattern to inner cylinder wall
           if (child.name === 'innerCardboardTube') {
+            const m = mat as THREE.MeshStandardMaterial;
+            if (cardboardCoreTexRef.current) {
+              m.map = cardboardCoreTexRef.current;
+              m.bumpMap = cardboardCoreTexRef.current;
+            }
+            m.bumpScale = 0.01;
+            m.roughness = 0.9; // industrial unreflective cardboard roughness
+            m.metalness = 0.0;
+            m.color = new THREE.Color('#FFFFFF'); // Clean cool white / light cool grey tone
+            m.needsUpdate = true;
             // Instantly sync physical scale of inner tube
-            child.scale.z = (config.width - 0.002) / DEFAULT_WIDTH;
+            child.scale.z = config.width / DEFAULT_WIDTH;
           }
         }
       });
@@ -263,6 +324,14 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     if (trailMeshRef.current && tapePatternTexRef.current) {
       const mat = trailMeshRef.current.material as THREE.MeshStandardMaterial;
       mat.map = tapePatternTexRef.current;
+      mat.bumpMap = tapeBumpTexRef.current;
+      mat.bumpScale = 0.015;
+      mat.normalScale.set(0.2, 0.2);
+      mat.roughness = 0.88;
+      mat.metalness = 0.0;
+      mat.color = new THREE.Color('#FFFFFF'); // Clean cool white / light cool grey tone
+      mat.emissive = new THREE.Color('#3a3a3a');
+      mat.emissiveMap = tapePatternTexRef.current;
       mat.needsUpdate = true;
     }
 
@@ -285,10 +354,10 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     scene.fog = new THREE.FogExp2(COLORS.deskColor, 0.035);
     sceneRef.current = scene;
 
-    // 2. Camera (Overhead oblique architectural perspective)
+    // 2. Camera (Overhead oblique architectural perspective - set to professional 3D view angle)
     const camera = new THREE.PerspectiveCamera(28, width / height, 0.1, 100);
-    camera.position.set(0, 7.5, 7.5);
-    camera.lookAt(0.35, -0.2, -0.15);
+    camera.position.set(5.5, 6.5, 7.5);
+    camera.lookAt(0, 0, 0); // Focus strictly on the tape roll at the origin
     cameraRef.current = camera;
 
     // 3. Renderer
@@ -307,30 +376,32 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     // Initialize textures for starting config
     updateTextures(configRef.current, []);
 
-    // 4. Lights (High design studio key lighting)
-    const ambientLight = new THREE.AmbientLight('#FFFDF2', 0.55);
+    // 4. Lights (High contrast industrial design studio lighting)
+    const ambientLight = new THREE.AmbientLight('#E3DBCB', 0.3); // warmer, slightly dimmer neutral base light to enhance shadow contrast
     scene.add(ambientLight);
 
-    const keyLight = new THREE.DirectionalLight('#FFFFFF', 0.85);
-    keyLight.position.set(6, 13, 5);
+    // Strong primary key light to produce crisp shadows and bright specular highlights
+    const keyLight = new THREE.DirectionalLight('#FFFFFF', 2.2);
+    keyLight.position.set(5.5, 9.5, 4.5);
     keyLight.castShadow = true;
-    // Configure shadows for maximum quality and smooth edges
+    
+    // Tighten the shadow camera bounds to maximize resolution for the tape roll area
     keyLight.shadow.mapSize.width = 2048;
     keyLight.shadow.mapSize.height = 2048;
-    keyLight.shadow.camera.near = 1;
-    keyLight.shadow.camera.far = 28;
-    keyLight.shadow.camera.left = -9;
-    keyLight.shadow.camera.right = 9;
-    keyLight.shadow.camera.top = 9;
-    keyLight.shadow.camera.bottom = -9;
-    keyLight.shadow.bias = -0.0002;
-    keyLight.shadow.radius = 4; // Softer shadows
+    keyLight.shadow.camera.near = 0.5;
+    keyLight.shadow.camera.far = 22;
+    keyLight.shadow.camera.left = -6;
+    keyLight.shadow.camera.right = 6;
+    keyLight.shadow.camera.top = 6;
+    keyLight.shadow.camera.bottom = -6;
+    keyLight.shadow.bias = -0.0004;
+    keyLight.shadow.radius = 1; // highly sharp, realistic edge profile
     scene.add(keyLight);
 
-    // Subtle blue fill light from the opposite side
-    const fillLight = new THREE.DirectionalLight('#E0F0FF', 0.25);
-    fillLight.position.set(-8, 5, -6);
-    scene.add(fillLight);
+    // Back-left rim light to separate the 3D roll from the background and define edges
+    const rimLight = new THREE.DirectionalLight('#FFFFFF', 0.8);
+    rimLight.position.set(-7, 6, -5);
+    scene.add(rimLight);
 
     // 5. Desk Surface Mesh
     const deskGeo = new THREE.PlaneGeometry(60, 60);
@@ -346,9 +417,18 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     scene.add(desk);
     deskRef.current = desk;
 
+    // Beautiful 3D Perspective Grid for clean, tech-forward structural alignment
+    const gridHelper = new THREE.GridHelper(50, 100, '#C5C5C5', '#DEDEDE');
+    gridHelper.position.y = 0.002; // slightly above table
+    const gridMat = gridHelper.material as THREE.LineBasicMaterial;
+    gridMat.opacity = 0.32;
+    gridMat.transparent = true;
+    gridMat.depthWrite = false;
+    scene.add(gridHelper);
+
     // 6. Build the hollow 3D Tape Roll Assembly
     const rollGroup = new THREE.Group();
-    rollGroup.position.set(1.5, INITIAL_RADIUS, -0.5); // centered-to-right starting position
+    rollGroup.position.set(0, INITIAL_RADIUS, 0); // Strictly centered at (0, radius, 0)
     scene.add(rollGroup);
     rollGroupRef.current = rollGroup;
 
@@ -360,15 +440,19 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     // Build the cylinder components (Hollow architecture with ring caps and cardboard core)
     const rollWidth = DEFAULT_WIDTH * 1.3; // 1.3x width base geometry scale
 
-    // Custom Washi Tape Material
+    // Custom Washi Tape Material - optimized for high quality matte paper texture
     const outerTapeMat = new THREE.MeshStandardMaterial({
       map: rollTapePatternTexRef.current || tapePatternTexRef.current,
       bumpMap: tapeBumpTexRef.current,
-      bumpScale: 0.006,
-      roughness: 0.82,
-      metalness: 0.0,
+      bumpScale: 0.015, // Delicate micro-paper grain normal/bump simulation
+      roughness: 0.88, // Dry matte paper feel
+      metalness: 0.0, // Completely non-reflective
+      color: new THREE.Color('#FFFFFF'), // Clean cool white / light cool grey tone
       side: THREE.DoubleSide,
+      emissive: new THREE.Color('#3a3a3a'), // Keep pattern clean, clear and brilliant
+      emissiveMap: rollTapePatternTexRef.current || tapePatternTexRef.current,
     });
+    outerTapeMat.normalScale.set(0.2, 0.2); // Set weak normalScale for paper micro-grain
 
     // Outer Tube representing wound paper tape
     const outerTubeGeo = new THREE.CylinderGeometry(
@@ -386,33 +470,43 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     outerTapeTube.receiveShadow = true;
     rollInnerMesh.add(outerTapeTube);
 
-    // Inner Cardboard Core Tube
+    // Inner Cardboard Core Tube - unreflective matte grey-white paperboard inside wall
     const cardboardMat = new THREE.MeshStandardMaterial({
-      color: '#D4C6A2',
-      roughness: 0.9,
+      map: cardboardCoreTexRef.current || null,
+      bumpMap: cardboardCoreTexRef.current || null,
+      bumpScale: 0.01,
+      roughness: 0.9, // industrial cardboard roughness
       metalness: 0.0,
+      color: new THREE.Color('#FFFFFF'), // Clean cool white / light cool grey tone
       side: THREE.DoubleSide,
     });
     const innerTubeGeo = new THREE.CylinderGeometry(
       CORE_RADIUS,
       CORE_RADIUS,
-      rollWidth - 0.002, // slightly recessed
+      rollWidth,
       64,
       1,
-      true
+      true // open ended
     );
     innerTubeGeo.rotateX(Math.PI / 2);
     const innerCardboardTube = new THREE.Mesh(innerTubeGeo, cardboardMat);
     innerCardboardTube.name = 'innerCardboardTube';
+    innerCardboardTube.castShadow = true;
+    innerCardboardTube.receiveShadow = true;
     rollInnerMesh.add(innerCardboardTube);
 
-    // Side Rings Caps (Layered Wound spiral texture)
+    // Side Rings Caps - realistic concentric layers with bump & roughness variance
     const sideCapMat = new THREE.MeshStandardMaterial({
       map: rollSideTexRef.current,
-      roughness: 0.85,
-      metalness: 0.0,
+      bumpMap: rollSideBumpTexRef.current || null,
+      bumpScale: 0.12, // High-frequency fiber/layer grain
+      roughnessMap: rollSideRoughnessTexRef.current || null,
+      roughness: 0.95, // Matte rough paper side edge
+      metalness: 0.0, // Completely matte
+      color: new THREE.Color('#FFFFFF'), // Clean cool white / light cool grey tone
       side: THREE.DoubleSide,
     });
+    sideCapMat.normalScale.set(2.5, 2.5); // Boost normalScale as requested to maximize fiber weaving look (2.5, 2.5)
 
     // Left Ring Cap
     const leftCapGeo = new THREE.RingGeometry(CORE_RADIUS, INITIAL_RADIUS, 64);
@@ -433,13 +527,17 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     const trailMat = new THREE.MeshStandardMaterial({
       map: tapePatternTexRef.current,
       bumpMap: tapeBumpTexRef.current,
-      bumpScale: 0.005,
-      roughness: 0.85,
-      metalness: 0.0,
+      bumpScale: 0.015,
+      roughness: 0.88, // Dry matte paper feel
+      metalness: 0.0, // Completely non-reflective
+      color: new THREE.Color('#FFFFFF'), // Clean cool white / light cool grey tone
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 1.0,
+      emissive: new THREE.Color('#3a3a3a'), // Keep unrolled trail pattern bright and high contrast
+      emissiveMap: tapePatternTexRef.current,
     });
+    trailMat.normalScale.set(0.2, 0.2); // Set weak normalScale for paper micro-grain
     const trailGeo = new THREE.BufferGeometry();
     const trailMesh = new THREE.Mesh(trailGeo, trailMat);
     trailMesh.castShadow = true;
@@ -730,7 +828,8 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       sideCapLeft.position.z = -currentConfig.width * 1.3 / 2;
       sideCapRight.position.z = currentConfig.width * 1.3 / 2;
       outerTapeTube.scale.z = currentConfig.width / DEFAULT_WIDTH;
-      innerCardboardTube.scale.z = (currentConfig.width - 0.002) / DEFAULT_WIDTH;
+      innerCardboardTube.scale.set(shrinkScale, shrinkScale, 1);
+      innerCardboardTube.scale.z = currentConfig.width / DEFAULT_WIDTH;
 
       // Adjust cylinder texture wrapping dynamically to keep the pattern size visually synchronized with the trail on every frame
       if (rollTapePatternTexRef.current) {
@@ -881,8 +980,12 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
 
       // Dispose textures
       tapePatternTexRef.current?.dispose();
+      rollTapePatternTexRef.current?.dispose();
       tapeBumpTexRef.current?.dispose();
       rollSideTexRef.current?.dispose();
+      rollSideBumpTexRef.current?.dispose();
+      rollSideRoughnessTexRef.current?.dispose();
+      cardboardCoreTexRef.current?.dispose();
       deskTexRef.current?.dispose();
     };
   }, []);
