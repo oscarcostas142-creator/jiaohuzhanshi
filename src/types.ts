@@ -1,4 +1,4 @@
-export type TapePattern = 'sage_gold' | 'terracotta_geo' | 'indigo_constellation' | 'pastel_grid';
+export type TapePattern = 'sage_gold' | 'terracotta_geo' | 'indigo_constellation' | 'pastel_grid' | 'custom';
 
 export type DeskMaterial = 'light_wood' | 'studio_slate' | 'cream_matte' | 'warm_sand';
 
@@ -7,6 +7,7 @@ export interface TapeConfig {
   pattern: TapePattern;
   deskMaterial: DeskMaterial;
   tapeColor: string; // Base accent color for customizing the pattern color
+  customImages?: string[]; // Array of base64 / blob URLs representing uploaded images
 }
 
 export interface PathPoint {
@@ -17,3 +18,10 @@ export interface PathPoint {
   nz: number; // Normal vector Z
   distance: number; // Cumulative path distance
 }
+
+export const COLORS = {
+  deskColor: '#F3EFEB',
+  tapeBaseColor: '#FCFAF7',
+  stampRed: '#C83C3C',
+  stampBlack: '#2C2C2C',
+};

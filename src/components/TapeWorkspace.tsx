@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { TapeConfig, PathPoint } from '../types';
+import { TapeConfig, PathPoint, COLORS } from '../types';
 import {
   generateTapePattern,
   generateTapeBumpMap,
@@ -22,6 +22,9 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Preloaded HTMLImageElement elements for custom user tapes
+  const [loadedCustomImages, setLoadedCustomImages] = useState<HTMLImageElement[]>([]);
+
   // Keep a reference to the latest config to use in Three.js render loop without re-running effects
   const configRef = useRef(config);
   useEffect(() => {
@@ -34,7 +37,7 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
   // Refs for scene interaction
   const mouse = useRef(new THREE.Vector2());
   const isDragging = useRef(false);
-  const targetPos = useRef(new THREE.Vector3(0, 0, 0));
+  const targetPos = useRef(new THREE.Vector3(1.5, 0, -0.5));
   const lastPathPointRef = useRef<THREE.Vector3 | null>(null);
 
   // Arrays to hold path data
@@ -48,9 +51,11 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
   const rollGroupRef = useRef<THREE.Group | null>(null); // Holds the entire rolling cylinder assembly
   const rollInnerMeshRef = useRef<THREE.Group | null>(null); // Inner assembly that rotates
   const trailMeshRef = useRef<THREE.Mesh | null>(null);
+  const rebuildTrailMeshRef = useRef<(() => void) | null>(null);
 
   // Textures
   const tapePatternTexRef = useRef<THREE.CanvasTexture | null>(null);
+  const rollTapePatternTexRef = useRef<THREE.CanvasTexture | null>(null); // Separate high-fidelity texture for the rolling cylinder
   const tapeBumpTexRef = useRef<THREE.CanvasTexture | null>(null);
   const rollSideTexRef = useRef<THREE.CanvasTexture | null>(null);
   const deskTexRef = useRef<THREE.CanvasTexture | null>(null);
@@ -60,29 +65,70 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
 
   // Configuration Constants
   const DEFAULT_WIDTH = 0.6;
-  const INITIAL_RADIUS = 0.9;
-  const CORE_RADIUS = 0.55;
-  const TAPE_THICKNESS = 0.008; // Thickness per overlap layer
-  const SLOPE_LIMIT = 0.002; // Soft bridge transition height change per segment
+  const INITIAL_RADIUS = 1.35; // 1.5x larger roll diameter
+  const CORE_RADIUS = 0.825; // 1.5x larger core diameter
+  const TAPE_THICKNESS = 0.016; // 2x physical thickness
+  const SLOPE_LIMIT = 0.004; // Double the slope limit for physical bridge consistency with 2x thickness
+
+  // Preload custom images into HTMLImageElement nodes
+  useEffect(() => {
+    if (config.pattern === 'custom' && config.customImages && config.customImages.length > 0) {
+      let loadedCount = 0;
+      const images: HTMLImageElement[] = [];
+      const urls = config.customImages;
+
+      urls.forEach((url, index) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          images[index] = img;
+          loadedCount++;
+          if (loadedCount === urls.length) {
+            setLoadedCustomImages(images.filter(Boolean));
+          }
+        };
+        img.onerror = () => {
+          loadedCount++;
+          if (loadedCount === urls.length) {
+            setLoadedCustomImages(images.filter(Boolean));
+          }
+        };
+        img.src = url;
+      });
+    } else {
+      setLoadedCustomImages([]);
+    }
+  }, [config.customImages, config.pattern]);
 
   // Core texture setup function
-  const updateTextures = (currentConfig: TapeConfig) => {
-    // 1. Tape Pattern
-    const patternCanvas = generateTapePattern(currentConfig.pattern);
-    if (tapePatternTexRef.current) {
-      tapePatternTexRef.current.image = patternCanvas;
-      tapePatternTexRef.current.needsUpdate = true;
-    } else {
-      const tex = new THREE.CanvasTexture(patternCanvas);
-      tex.wrapS = THREE.RepeatWrapping;
-      tex.wrapT = THREE.RepeatWrapping;
-      tex.repeat.set(1, 0.4); // Tile along the tape trail
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.anisotropy = 4;
-      tapePatternTexRef.current = tex;
-    }
+  const updateTextures = (currentConfig: TapeConfig, customImgs: HTMLImageElement[]) => {
+    // Generate a single shared pattern canvas to ensure 100% synchronization of data, texture, scale, and alignment
+    const sharedPatternCanvas = generateTapePattern(currentConfig.pattern, customImgs);
 
-    // 2. Paper Bump Map
+    // 1. Trail Tape Pattern (dispose of old texture to clear WebGL cache completely and immediately update existing trails)
+    if (tapePatternTexRef.current) {
+      tapePatternTexRef.current.dispose();
+    }
+    const trailTex = new THREE.CanvasTexture(sharedPatternCanvas);
+    trailTex.wrapS = THREE.RepeatWrapping;
+    trailTex.wrapT = THREE.RepeatWrapping;
+    trailTex.repeat.set(1, 1); // 1:1 trail mapping, density is controlled dynamically by patternScale inside rebuildTrailMesh
+    trailTex.minFilter = THREE.LinearMipmapLinearFilter;
+    trailTex.anisotropy = 4;
+    tapePatternTexRef.current = trailTex;
+
+    // 2. Roll Cylinder Pattern (dispose of old texture for perfect synchronization and instant update)
+    if (rollTapePatternTexRef.current) {
+      rollTapePatternTexRef.current.dispose();
+    }
+    const rollTex = new THREE.CanvasTexture(sharedPatternCanvas);
+    rollTex.wrapS = THREE.RepeatWrapping;
+    rollTex.wrapT = THREE.RepeatWrapping;
+    rollTex.minFilter = THREE.LinearMipmapLinearFilter;
+    rollTex.anisotropy = 4;
+    rollTapePatternTexRef.current = rollTex;
+
+    // 3. Paper Bump Map
     if (!tapeBumpTexRef.current) {
       const bumpCanvas = generateTapeBumpMap();
       const tex = new THREE.CanvasTexture(bumpCanvas);
@@ -92,49 +138,46 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       tapeBumpTexRef.current = tex;
     }
 
-    // 3. Roll Side Wound Paper Texture
-    // Determine the base color theme for the side ring of the cylinder
-    let baseColor = '#6F806C'; // Sage Green
-    if (currentConfig.pattern === 'terracotta_geo') baseColor = '#B85E46';
-    if (currentConfig.pattern === 'indigo_constellation') baseColor = '#1D2436';
-    if (currentConfig.pattern === 'pastel_grid') baseColor = '#F5EFE6';
+    // 4. Roll Side Wound Paper Texture
+    let baseColor = '#738570'; // Sage Green
+    if (currentConfig.pattern === 'terracotta_geo') baseColor = '#C46A52';
+    if (currentConfig.pattern === 'indigo_constellation') baseColor = '#1B2232';
+    if (currentConfig.pattern === 'pastel_grid') baseColor = '#FAF8F5';
+    if (currentConfig.pattern === 'custom') baseColor = '#FAF8F5';
 
     const sideCanvas = generateRollSideTexture(baseColor);
     if (rollSideTexRef.current) {
-      rollSideTexRef.current.image = sideCanvas;
-      rollSideTexRef.current.needsUpdate = true;
-    } else {
-      const tex = new THREE.CanvasTexture(sideCanvas);
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      rollSideTexRef.current = tex;
+      rollSideTexRef.current.dispose();
     }
+    const sideTex = new THREE.CanvasTexture(sideCanvas);
+    sideTex.minFilter = THREE.LinearMipmapLinearFilter;
+    rollSideTexRef.current = sideTex;
 
-    // 4. Desk Surface Texture
+    // 5. Desk Surface Texture
     const deskCanvas = generateDeskTexture(currentConfig.deskMaterial);
     if (deskTexRef.current) {
-      deskTexRef.current.image = deskCanvas;
-      deskTexRef.current.needsUpdate = true;
-    } else {
-      const tex = new THREE.CanvasTexture(deskCanvas);
-      tex.wrapS = THREE.RepeatWrapping;
-      tex.wrapT = THREE.RepeatWrapping;
-      tex.repeat.set(4, 4);
-      deskTexRef.current = tex;
+      deskTexRef.current.dispose();
     }
+    const deskTex = new THREE.CanvasTexture(deskCanvas);
+    deskTex.wrapS = THREE.RepeatWrapping;
+    deskTex.wrapT = THREE.RepeatWrapping;
+    deskTex.repeat.set(4, 4);
+    deskTexRef.current = deskTex;
   };
 
   // Handle Clear Trigger
   useEffect(() => {
+    let fadeInterval: NodeJS.Timeout | null = null;
     if (clearTrigger > 0) {
       // Smooth fade-out clear
       const trailMesh = trailMeshRef.current;
       if (trailMesh && trailMesh.material) {
         const mat = trailMesh.material as THREE.MeshStandardMaterial;
         let opacity = 1.0;
-        const fadeInterval = setInterval(() => {
+        fadeInterval = setInterval(() => {
           opacity -= 0.1;
           if (opacity <= 0) {
-            clearInterval(fadeInterval);
+            if (fadeInterval) clearInterval(fadeInterval);
             // Clear path points and reset geometry
             pathPoints.current = [];
             statsRef.current = { length: 0, overlaps: 0 };
@@ -167,11 +210,14 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
         lastPathPointRef.current = null;
       }
     }
+    return () => {
+      if (fadeInterval) clearInterval(fadeInterval);
+    };
   }, [clearTrigger]);
 
-  // Propagate and update textures when config changes
+  // Propagate and update textures when config or loaded custom images change
   useEffect(() => {
-    updateTextures(config);
+    updateTextures(config, loadedCustomImages);
 
     // Update desk material map
     if (deskRef.current && deskTexRef.current) {
@@ -180,7 +226,7 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       mat.needsUpdate = true;
     }
 
-    // Update roll side cap textures
+    // Update roll side cap textures and roll pattern
     if (rollInnerMeshRef.current && rollSideTexRef.current) {
       rollInnerMeshRef.current.traverse((child) => {
         if (child instanceof THREE.Mesh) {
@@ -190,14 +236,24 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
             const m = mat as THREE.MeshStandardMaterial;
             m.map = rollSideTexRef.current;
             m.needsUpdate = true;
+            
+            // Instantly sync physical offset of side caps
+            const isLeft = child.name === 'sideCapLeft';
+            child.position.z = (isLeft ? -1 : 1) * config.width * 1.3 / 2;
           }
-          // Apply washi pattern to outer tube cylinder
+          // Apply high-fidelity washi pattern to outer tube cylinder
           if (child.name === 'outerTapeTube') {
             const m = mat as THREE.MeshStandardMaterial;
-            if (tapePatternTexRef.current) {
-              m.map = tapePatternTexRef.current;
+            if (rollTapePatternTexRef.current) {
+              m.map = rollTapePatternTexRef.current;
               m.needsUpdate = true;
             }
+            // Instantly sync physical scale of outer tube
+            child.scale.z = config.width / DEFAULT_WIDTH;
+          }
+          if (child.name === 'innerCardboardTube') {
+            // Instantly sync physical scale of inner tube
+            child.scale.z = (config.width - 0.002) / DEFAULT_WIDTH;
           }
         }
       });
@@ -209,7 +265,12 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       mat.map = tapePatternTexRef.current;
       mat.needsUpdate = true;
     }
-  }, [config.pattern, config.deskMaterial, config.width]);
+
+    // Immediately trigger trail mesh geometry rebuild to update UV mapping with new scales
+    if (rebuildTrailMeshRef.current) {
+      rebuildTrailMeshRef.current();
+    }
+  }, [config.pattern, config.deskMaterial, config.width, loadedCustomImages]);
 
   // Main Three.js Initialization
   useEffect(() => {
@@ -220,14 +281,14 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
 
     // 1. Scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#FAF9F6'); // Elegant ivory minimalist bg
-    scene.fog = new THREE.FogExp2('#FAF9F6', 0.035);
+    scene.background = new THREE.Color(COLORS.deskColor); // Elegant ivory minimalist bg
+    scene.fog = new THREE.FogExp2(COLORS.deskColor, 0.035);
     sceneRef.current = scene;
 
     // 2. Camera (Overhead oblique architectural perspective)
     const camera = new THREE.PerspectiveCamera(28, width / height, 0.1, 100);
-    camera.position.set(0, 11, 11);
-    camera.lookAt(0, -0.2, 0);
+    camera.position.set(0, 7.5, 7.5);
+    camera.lookAt(0.35, -0.2, -0.15);
     cameraRef.current = camera;
 
     // 3. Renderer
@@ -244,7 +305,7 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     rendererRef.current = renderer;
 
     // Initialize textures for starting config
-    updateTextures(configRef.current);
+    updateTextures(configRef.current, []);
 
     // 4. Lights (High design studio key lighting)
     const ambientLight = new THREE.AmbientLight('#FFFDF2', 0.55);
@@ -287,7 +348,7 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
 
     // 6. Build the hollow 3D Tape Roll Assembly
     const rollGroup = new THREE.Group();
-    rollGroup.position.set(0, INITIAL_RADIUS, 0); // rest on ground initially
+    rollGroup.position.set(1.5, INITIAL_RADIUS, -0.5); // centered-to-right starting position
     scene.add(rollGroup);
     rollGroupRef.current = rollGroup;
 
@@ -297,11 +358,11 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     rollInnerMeshRef.current = rollInnerMesh;
 
     // Build the cylinder components (Hollow architecture with ring caps and cardboard core)
-    const rollWidth = configRef.current.width;
+    const rollWidth = DEFAULT_WIDTH * 1.3; // 1.3x width base geometry scale
 
     // Custom Washi Tape Material
     const outerTapeMat = new THREE.MeshStandardMaterial({
-      map: tapePatternTexRef.current,
+      map: rollTapePatternTexRef.current || tapePatternTexRef.current,
       bumpMap: tapeBumpTexRef.current,
       bumpScale: 0.006,
       roughness: 0.82,
@@ -471,23 +532,75 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
 
     // --- REBUILD TAPE TRAIL GEOMETRY ---
     const rebuildTrailMesh = () => {
-      const pts = pathPoints.current;
-      if (pts.length < 2) return;
+      const pts = [...pathPoints.current];
+
+      // If the roll is currently unrolling, dynamically append the current roll's touch-down point
+      // to the points array. This ensures a 100% gapless transition on every frame!
+      if (rollGroupRef.current && lastPathPointRef.current) {
+        const rollPos = rollGroupRef.current.position;
+        let ridingHeight = 0.0;
+        if (pathPoints.current.length > 0) {
+          ridingHeight = pathPoints.current[pathPoints.current.length - 1].y;
+        }
+        const bottomY = ridingHeight;
+        const bottomPos = new THREE.Vector3(rollPos.x, bottomY, rollPos.z);
+        const lastPt = pts[pts.length - 1];
+
+        const dist = lastPt ? Math.sqrt(
+          Math.pow(bottomPos.x - lastPt.x, 2) +
+          Math.pow(bottomPos.z - lastPt.z, 2)
+        ) : 0;
+
+        if (dist > 0.001) {
+          const perpDir = new THREE.Vector3(0, 0, 1).applyQuaternion(rollGroupRef.current.quaternion).normalize();
+
+          // Parallel transport: align normal vector with the previous point to prevent sudden twists or flips
+          if (lastPt) {
+            const dot = perpDir.x * lastPt.nx + perpDir.z * lastPt.nz;
+            if (dot < 0) {
+              perpDir.negate();
+            }
+          }
+
+          pts.push({
+            x: bottomPos.x,
+            y: bottomPos.y,
+            z: bottomPos.z,
+            nx: perpDir.x,
+            nz: perpDir.z,
+            distance: (lastPt ? lastPt.distance : 0) + dist,
+          });
+        }
+      }
+
+      if (pts.length < 2) {
+        if (trailMeshRef.current) {
+          const oldGeom = trailMeshRef.current.geometry;
+          const geom = new THREE.BufferGeometry();
+          geom.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+          geom.setAttribute('uv', new THREE.Float32BufferAttribute([], 2));
+          trailMeshRef.current.geometry = geom;
+          oldGeom.dispose();
+        }
+        return;
+      }
 
       const positions: number[] = [];
       const uvs: number[] = [];
       const indices: number[] = [];
-      const width = configRef.current.width;
-      const patternScale = 3.5; // Controls how stretched the design looks along the strip
+      const width = configRef.current.width * 1.3; // 1.3x width scale
+
+      const cellPitch = width; // Perfect 1:1 cell aspect ratio matching the 1024x128 texture slots
+      const patternScale = cellPitch * 8; // 8 slots in the texture
 
       for (let i = 0; i < pts.length; i++) {
         const pt = pts[i];
-        
-        // Expansion offsets on the XZ plane perpendicular to motion
+
+        // Normal offsets on XZ plane perpendicular to movement vector
         const ox = pt.nx * (width / 2);
         const oz = pt.nz * (width / 2);
 
-        // Vertices Left & Right (Y-height holds the bridge overlap layers)
+        // Compute left and right vertices with bridges/stacking height
         const vlX = pt.x + ox;
         const vlY = pt.y;
         const vlZ = pt.z + oz;
@@ -499,37 +612,41 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
         positions.push(vlX, vlY, vlZ);
         positions.push(vrX, vrY, vrZ);
 
-        // UV coords mapping: U goes from 0 to 1 across tape width.
-        // V coordinates flow seamlessly along the trail based on cumulative distance.
-        const v = pt.distance / patternScale;
-        uvs.push(0, v);
-        uvs.push(1, v);
+        // --- MATHEMATICALLY CONTINUOUS UNDISTORTED UV MAPPING ---
+        // U is strictly proportional to cumulative length along the path (100% stable, no jumping cell reference planes)
+        // V goes from 1.0 (Left edge) to 0.0 (Right edge)
+        const u = pt.distance / patternScale;
 
-        // Triangulate quads between points
+        uvs.push(u, 1.0); // Left vertex
+        uvs.push(u, 0.0); // Right vertex
+
+        // Build continuous quad triangles between consecutive pairs of points
         if (i < pts.length - 1) {
           const a = i * 2;
           const b = i * 2 + 1;
           const c = (i + 1) * 2;
           const d = (i + 1) * 2 + 1;
 
-          // Triangle 1
+          // Triangle 1: a -> b -> c
           indices.push(a, b, c);
-          // Triangle 2
+          // Triangle 2: b -> d -> c
           indices.push(b, d, c);
         }
       }
 
       if (trailMeshRef.current) {
-        const geom = trailMeshRef.current.geometry;
+        const oldGeom = trailMeshRef.current.geometry;
+        const geom = new THREE.BufferGeometry();
         geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
         geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
         geom.setIndex(indices);
         geom.computeVertexNormals();
-        geom.attributes.position.needsUpdate = true;
-        geom.attributes.uv.needsUpdate = true;
-        if (geom.index) geom.index.needsUpdate = true;
+        trailMeshRef.current.geometry = geom;
+        oldGeom.dispose();
       }
     };
+
+    rebuildTrailMeshRef.current = rebuildTrailMesh;
 
     // --- MATHEMATICAL OVERLAP STACKING ALGORITHM ---
     const calculateOverlapHeight = (newX: number, newZ: number, width: number): number => {
@@ -601,12 +718,34 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       const currentConfig = configRef.current;
       const easing = 0.12;
 
-      // Sits on top of the desk (Y height matches the current rolling radius)
-      // Radius shrinks dynamically as total tape length unrolled increases!
-      const currentRadius = Math.max(
-        CORE_RADIUS + 0.015,
-        Math.sqrt(INITIAL_RADIUS * INITIAL_RADIUS - 0.0016 * statsRef.current.length)
-      );
+      // Keep the tape roll radius constant at its initial size during the rolling process
+      const currentRadius = INITIAL_RADIUS;
+
+      // Update 3D roll geometry dimensions and scales to dynamically match config.width on every frame
+      const shrinkScale = currentRadius / INITIAL_RADIUS;
+      outerTapeTube.scale.set(shrinkScale, shrinkScale, 1);
+      sideCapLeft.scale.set(shrinkScale, shrinkScale, 1);
+      sideCapRight.scale.set(shrinkScale, shrinkScale, 1);
+      
+      sideCapLeft.position.z = -currentConfig.width * 1.3 / 2;
+      sideCapRight.position.z = currentConfig.width * 1.3 / 2;
+      outerTapeTube.scale.z = currentConfig.width / DEFAULT_WIDTH;
+      innerCardboardTube.scale.z = (currentConfig.width - 0.002) / DEFAULT_WIDTH;
+
+      // Adjust cylinder texture wrapping dynamically to keep the pattern size visually synchronized with the trail on every frame
+      if (rollTapePatternTexRef.current) {
+        const circ = 2 * Math.PI * currentRadius;
+        const width = currentConfig.width * 1.3;
+        const cellPitch = width; // Matching rebuildTrailMesh exactly
+        const patternScale = cellPitch * 8; // Matching rebuildTrailMesh exactly
+        rollTapePatternTexRef.current.repeat.set(circ / patternScale, 1.0);
+
+        // Align the texture offset so that the bottom touch point of the cylinder perfectly matches the unrolled trail pattern
+        const theta = rollInnerMesh.rotation.z;
+        const unrolledLength = statsRef.current.length;
+        const offset = (unrolledLength + currentRadius * (theta - Math.PI / 2)) / patternScale;
+        rollTapePatternTexRef.current.offset.x = offset;
+      }
 
       // Check current trail tail height to make sure the roll rides on top of overlaps too!
       let currentRidingHeight = 0.0;
@@ -642,26 +781,16 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
         const yaw = Math.atan2(moveDir.x, moveDir.z);
         rollGroup.rotation.y = yaw - Math.PI / 2;
 
-        // 3. Dynamic scale of outer tape tube and side caps to shrink as it unrolls!
-        const shrinkScale = currentRadius / INITIAL_RADIUS;
-        outerTapeTube.scale.set(shrinkScale, shrinkScale, 1);
-        sideCapLeft.scale.set(shrinkScale, shrinkScale, 1);
-        sideCapRight.scale.set(shrinkScale, shrinkScale, 1);
-        
-        // Recalculate side rings geometries outer radius manually or scale them
-        // RingGeometry scale works beautifully as they are centered. We also need to scale their positions:
-        sideCapLeft.position.z = -currentConfig.width / 2;
-        sideCapRight.position.z = currentConfig.width / 2;
-        outerTapeTube.scale.z = currentConfig.width / DEFAULT_WIDTH;
-        innerCardboardTube.scale.z = (currentConfig.width - 0.002) / DEFAULT_WIDTH;
-
         // 4. Update Path Trail Point
         if (!lastPathPointRef.current) {
           lastPathPointRef.current = new THREE.Vector3().copy(rollGroup.position);
           lastPathPointRef.current.y = 0.002; // Flat on table base
         }
 
-        const distSinceLast = rollGroup.position.distanceTo(lastPathPointRef.current);
+        const distSinceLast = Math.sqrt(
+          Math.pow(rollGroup.position.x - lastPathPointRef.current.x, 2) +
+          Math.pow(rollGroup.position.z - lastPathPointRef.current.z, 2)
+        );
         const recordingThreshold = 0.08; // Point density threshold for perfect smooth curves
 
         if (distSinceLast > recordingThreshold) {
@@ -672,6 +801,15 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
           // The perpendicular vector is the local Z axis of the rollGroup in world space!
           // Since the rollGroup is rotated by Y, its local Z unit vector in world space can be retrieved:
           const perpDir = new THREE.Vector3(0, 0, 1).applyQuaternion(rollGroup.quaternion).normalize();
+
+          // Parallel transport: align normal vector with previous point to prevent sudden twists or flips
+          if (pathPoints.current.length > 0) {
+            const prevPt = pathPoints.current[pathPoints.current.length - 1];
+            const dot = perpDir.x * prevPt.nx + perpDir.z * prevPt.nz;
+            if (dot < 0) {
+              perpDir.negate();
+            }
+          }
 
           // Compute stacking height based on historic crossings
           const targetHeight = calculateOverlapHeight(bottomPos.x, bottomPos.z, currentConfig.width);
@@ -694,9 +832,6 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
           // Apply gorgeous backward-forward height bridging
           smoothBridgeHeights();
 
-          // Rebuild Trail Mesh
-          rebuildTrailMesh();
-
           // Track last recorded position
           lastPathPointRef.current.copy(rollGroup.position);
           lastPathPointRef.current.y = targetHeight;
@@ -704,6 +839,9 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       }
 
       prevRollPos.copy(rollGroup.position);
+
+      // Rebuild the dynamic trail ribbon on every frame to ensure the transition is 100% gapless and smooth
+      rebuildTrailMesh();
 
       renderer.render(scene, camera);
       animationFrameId = requestAnimationFrame(tick);
@@ -713,6 +851,7 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
 
     // Cleanup
     return () => {
+      rebuildTrailMeshRef.current = null;
       cancelAnimationFrame(animationFrameId);
       resizeObserver.disconnect();
       if (containerEl) {
