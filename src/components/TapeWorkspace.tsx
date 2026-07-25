@@ -56,6 +56,12 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
   const trailMeshRef = useRef<THREE.Mesh | null>(null);
   const rebuildTrailMeshRef = useRef<(() => void) | null>(null);
 
+  // Camera state refs for smooth transitions (focus / restore)
+  const targetCameraPosRef = useRef(new THREE.Vector3(4.8, 13.5, 9.2));
+  const targetCameraLookAtRef = useRef(new THREE.Vector3(0, 0.95, 0));
+  const currentCameraLookAtRef = useRef(new THREE.Vector3(0, 0.95, 0));
+  const isCameraFocusedRef = useRef(false);
+
   // Textures
   const tapePatternTexRef = useRef<THREE.CanvasTexture | null>(null);
   const rollTapePatternTexRef = useRef<THREE.CanvasTexture | null>(null); // Separate high-fidelity texture for the rolling cylinder
@@ -72,7 +78,8 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
   // Configuration Constants
   const DEFAULT_WIDTH = 0.6;
   const INITIAL_RADIUS = 1.0; // 1.0 Outer radius as requested
-  const CORE_RADIUS = 0.5; // 0.5 Inner radius as requested
+  const CORE_RADIUS = 0.62; // 0.62 Inner radius as requested (ratio 0.62 : 1.0)
+  const SCALE_FACTOR = 1.95; // Scale factor for the physical tape roll model, slightly enlarged as requested
   const TAPE_THICKNESS = 0.016; // 2x physical thickness
   const SLOPE_LIMIT = 0.004; // Double the slope limit for physical bridge consistency with 2x thickness
 
@@ -109,18 +116,20 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
   // Core texture setup function
   const updateTextures = (currentConfig: TapeConfig, customImgs: HTMLImageElement[]) => {
     // Generate a single shared pattern canvas to ensure 100% synchronization of data, texture, scale, and alignment
-    const sharedPatternCanvas = generateTapePattern(currentConfig.pattern, customImgs);
+    const sharedPatternCanvas = generateTapePattern(currentConfig.pattern, customImgs, currentConfig.tapeColor || '#E61919');
 
-    // 1. Trail Tape Pattern (dispose of old texture to clear WebGL cache completely and immediately update existing trails)
+        // 1. Trail Tape Pattern (dispose of old texture to clear WebGL cache completely and immediately update existing trails)
     if (tapePatternTexRef.current) {
       tapePatternTexRef.current.dispose();
     }
     const trailTex = new THREE.CanvasTexture(sharedPatternCanvas);
     trailTex.wrapS = THREE.RepeatWrapping;
-    trailTex.wrapT = THREE.RepeatWrapping;
+    trailTex.wrapT = THREE.ClampToEdgeWrapping;
+    trailTex.colorSpace = THREE.SRGBColorSpace;
     trailTex.repeat.set(1, 1); // 1:1 trail mapping, density is controlled dynamically by patternScale inside rebuildTrailMesh
     trailTex.minFilter = THREE.LinearMipmapLinearFilter;
-    trailTex.anisotropy = 4;
+    trailTex.magFilter = THREE.LinearFilter;
+    trailTex.anisotropy = 16; // Maximum anisotropic filtering for extreme sharpness at oblique viewing angles
     tapePatternTexRef.current = trailTex;
 
     // 2. Roll Cylinder Pattern (dispose of old texture for perfect synchronization and instant update)
@@ -129,9 +138,11 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     }
     const rollTex = new THREE.CanvasTexture(sharedPatternCanvas);
     rollTex.wrapS = THREE.RepeatWrapping;
-    rollTex.wrapT = THREE.RepeatWrapping;
+    rollTex.wrapT = THREE.ClampToEdgeWrapping;
+    rollTex.colorSpace = THREE.SRGBColorSpace;
     rollTex.minFilter = THREE.LinearMipmapLinearFilter;
-    rollTex.anisotropy = 4;
+    rollTex.magFilter = THREE.LinearFilter;
+    rollTex.anisotropy = 16; // Maximum anisotropic filtering for extreme sharpness at oblique viewing angles
     rollTapePatternTexRef.current = rollTex;
 
     // 3. Paper Bump Map
@@ -202,52 +213,38 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
 
   // Handle Clear Trigger
   useEffect(() => {
-    let fadeInterval: NodeJS.Timeout | null = null;
     if (clearTrigger > 0) {
-      // Smooth fade-out clear
-      const trailMesh = trailMeshRef.current;
-      if (trailMesh && trailMesh.material) {
-        const mat = trailMesh.material as THREE.MeshStandardMaterial;
-        let opacity = 1.0;
-        fadeInterval = setInterval(() => {
-          opacity -= 0.1;
-          if (opacity <= 0) {
-            if (fadeInterval) clearInterval(fadeInterval);
-            // Clear path points and reset geometry
-            pathPoints.current = [];
-            statsRef.current = { length: 0, overlaps: 0 };
-            onStatsUpdate(0, 0);
-            setTotalLength(0);
-            if (trailMesh.geometry) {
-              trailMesh.geometry.dispose();
-              trailMesh.geometry = new THREE.BufferGeometry();
-            }
-            mat.opacity = 1.0; // Reset for future draw
-            // Move roll back to center
-            if (rollGroupRef.current) {
-              rollGroupRef.current.position.set(0, INITIAL_RADIUS, 0);
-              targetPos.current.set(0, 0, 0);
-            }
-            lastPathPointRef.current = null;
-          } else {
-            mat.opacity = opacity;
-          }
-        }, 30);
-      } else {
-        pathPoints.current = [];
-        statsRef.current = { length: 0, overlaps: 0 };
-        onStatsUpdate(0, 0);
-        setTotalLength(0);
-        if (rollGroupRef.current) {
-          rollGroupRef.current.position.set(0, INITIAL_RADIUS, 0);
-          targetPos.current.set(0, 0, 0);
-        }
-        lastPathPointRef.current = null;
+      isDragging.current = false; // Stop any active user dragging/interaction instantly
+      
+      // Smoothly restore the camera back to the original oblique perspective
+      isCameraFocusedRef.current = false;
+      targetCameraPosRef.current.set(4.8, 13.5, 9.2);
+      targetCameraLookAtRef.current.set(0, 0.95, 0);
+
+      // Reset the roll target back to the central origin smoothly
+      targetPos.current.set(0, 0, 0);
+
+      // Instantly clear the path points and stats to avoid rendering lags
+      pathPoints.current = [];
+      statsRef.current = { length: 0, overlaps: 0 };
+      onStatsUpdate(0, 0);
+      setTotalLength(0);
+      lastPathPointRef.current = null;
+
+      // Update the geometry of the trail to be empty immediately!
+      if (rebuildTrailMeshRef.current) {
+        rebuildTrailMeshRef.current();
+      }
+
+      // Also reset the physical position and rotation of the cylinder immediately to origin
+      if (rollGroupRef.current) {
+        rollGroupRef.current.position.set(0, INITIAL_RADIUS * SCALE_FACTOR, 0);
+        rollGroupRef.current.rotation.set(0, 0, 0);
+      }
+      if (rollInnerMeshRef.current) {
+        rollInnerMeshRef.current.rotation.set(0, 0, 0);
       }
     }
-    return () => {
-      if (fadeInterval) clearInterval(fadeInterval);
-    };
   }, [clearTrigger]);
 
   // Propagate and update textures when config or loaded custom images change
@@ -271,8 +268,8 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
             const m = mat as THREE.MeshStandardMaterial;
             m.map = rollSideTexRef.current;
             m.bumpMap = rollSideBumpTexRef.current;
-            m.bumpScale = 0.12; // Elevated 3D fiber depth
-            m.normalScale.set(2.5, 2.5); // Boost normal scale as requested to maximize torn weaving fiber texture
+            m.bumpScale = 0.06; // High-frequency fiber/layer grain (reduced for silkiness)
+            m.normalScale.set(1.5, 1.5); // Softened normalScale for natural mature fiber weave depth
             m.roughnessMap = rollSideRoughnessTexRef.current;
             m.roughness = 0.95; // Matte rough paper side edge
             m.metalness = 0.0; // Completely matte
@@ -288,7 +285,7 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
             const m = mat as THREE.MeshStandardMaterial;
             if (rollTapePatternTexRef.current) {
               m.map = rollTapePatternTexRef.current;
-              m.emissive = new THREE.Color('#3a3a3a'); // Keeping pattern bright and clear without environmental dullness
+              m.emissive = new THREE.Color('#151515'); // Lower emissive to prevent washing out the pattern saturation
               m.emissiveMap = rollTapePatternTexRef.current;
               m.bumpMap = tapeBumpTexRef.current;
               m.bumpScale = 0.015; // Delicate micro-paper grain normal/bump simulation
@@ -330,7 +327,7 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       mat.roughness = 0.88;
       mat.metalness = 0.0;
       mat.color = new THREE.Color('#FFFFFF'); // Clean cool white / light cool grey tone
-      mat.emissive = new THREE.Color('#3a3a3a');
+      mat.emissive = new THREE.Color('#151515'); // Lower emissive to prevent washing out the pattern saturation
       mat.emissiveMap = tapePatternTexRef.current;
       mat.needsUpdate = true;
     }
@@ -340,6 +337,22 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       rebuildTrailMeshRef.current();
     }
   }, [config.pattern, config.deskMaterial, config.width, loadedCustomImages]);
+
+  // Handle Screenshot Request
+  useEffect(() => {
+    const handleRequestScreenshot = () => {
+      if (canvasRef.current && rendererRef.current && sceneRef.current && cameraRef.current) {
+        // Render current state to ensure perfect capture
+        rendererRef.current.render(sceneRef.current, cameraRef.current);
+        const dataUrl = canvasRef.current.toDataURL('image/png');
+        window.dispatchEvent(new CustomEvent('screenshot-captured', { detail: { dataUrl } }));
+      }
+    };
+    window.addEventListener('request-screenshot', handleRequestScreenshot);
+    return () => {
+      window.removeEventListener('request-screenshot', handleRequestScreenshot);
+    };
+  }, []);
 
   // Main Three.js Initialization
   useEffect(() => {
@@ -354,10 +367,10 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     scene.fog = new THREE.FogExp2(COLORS.deskColor, 0.035);
     sceneRef.current = scene;
 
-    // 2. Camera (Overhead oblique architectural perspective - set to professional 3D view angle)
+    // 2. Camera (Overhead oblique architectural perspective zoomed for precise volume and balanced industrial scale)
     const camera = new THREE.PerspectiveCamera(28, width / height, 0.1, 100);
-    camera.position.set(5.5, 6.5, 7.5);
-    camera.lookAt(0, 0, 0); // Focus strictly on the tape roll at the origin
+    camera.position.copy(targetCameraPosRef.current);
+    camera.lookAt(currentCameraLookAtRef.current); // Focus slightly above the origin to shift the tape roll down to the vertical center of the screen
     cameraRef.current = camera;
 
     // 3. Renderer
@@ -366,9 +379,10 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       antialias: true,
       alpha: false,
       powerPreference: 'high-performance',
+      preserveDrawingBuffer: true,
     });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 3.0));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     rendererRef.current = renderer;
@@ -376,12 +390,12 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     // Initialize textures for starting config
     updateTextures(configRef.current, []);
 
-    // 4. Lights (High contrast industrial design studio lighting)
-    const ambientLight = new THREE.AmbientLight('#E3DBCB', 0.3); // warmer, slightly dimmer neutral base light to enhance shadow contrast
+    // 4. Lights (Warm, balanced ambient lighting to ensure soft shadows that are never pitch black)
+    const ambientLight = new THREE.AmbientLight('#FAF6EE', 1.4); // extremely bright and warm ambient base
     scene.add(ambientLight);
 
     // Strong primary key light to produce crisp shadows and bright specular highlights
-    const keyLight = new THREE.DirectionalLight('#FFFFFF', 2.2);
+    const keyLight = new THREE.DirectionalLight('#FFFFFF', 1.2); // Softened from 2.2 to prevent harsh high-contrast black shadows
     keyLight.position.set(5.5, 9.5, 4.5);
     keyLight.castShadow = true;
     
@@ -428,7 +442,8 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
 
     // 6. Build the hollow 3D Tape Roll Assembly
     const rollGroup = new THREE.Group();
-    rollGroup.position.set(0, INITIAL_RADIUS, 0); // Strictly centered at (0, radius, 0)
+    rollGroup.scale.set(SCALE_FACTOR, SCALE_FACTOR, SCALE_FACTOR);
+    rollGroup.position.set(0, INITIAL_RADIUS * SCALE_FACTOR, 0); // Strictly centered at (0, radius * SCALE_FACTOR, 0)
     scene.add(rollGroup);
     rollGroupRef.current = rollGroup;
 
@@ -445,16 +460,22 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       map: rollTapePatternTexRef.current || tapePatternTexRef.current,
       bumpMap: tapeBumpTexRef.current,
       bumpScale: 0.015, // Delicate micro-paper grain normal/bump simulation
-      roughness: 0.88, // Dry matte paper feel
+      roughness: 0.9, // High-roughness matte paper as requested
       metalness: 0.0, // Completely non-reflective
       color: new THREE.Color('#FFFFFF'), // Clean cool white / light cool grey tone
       side: THREE.DoubleSide,
-      emissive: new THREE.Color('#3a3a3a'), // Keep pattern clean, clear and brilliant
+      emissive: new THREE.Color('#151515'), // Lower emissive to keep patterns highly vibrant and saturated
       emissiveMap: rollTapePatternTexRef.current || tapePatternTexRef.current,
     });
     outerTapeMat.normalScale.set(0.2, 0.2); // Set weak normalScale for paper micro-grain
+    outerTapeMat.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        /float\s+dotNL\s*=\s*saturate\s*\(\s*dot\s*\(\s*(geometry\.normal|geometryNormal)\s*,\s*directLight\.direction\s*\)\s*\)\s*;/g,
+        'float dotNL = smoothstep( -0.35, 1.0, dot( $1, directLight.direction ) ) * 0.8 + 0.2;'
+      );
+    };
 
-    // Outer Tube representing wound paper tape
+        // Outer Tube representing wound paper tape
     const outerTubeGeo = new THREE.CylinderGeometry(
       INITIAL_RADIUS,
       INITIAL_RADIUS,
@@ -467,7 +488,7 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     const outerTapeTube = new THREE.Mesh(outerTubeGeo, outerTapeMat);
     outerTapeTube.name = 'outerTapeTube';
     outerTapeTube.castShadow = true;
-    outerTapeTube.receiveShadow = true;
+    outerTapeTube.receiveShadow = false; // Disable to completely prevent self-shadowing acne/artifacts on the roll
     rollInnerMesh.add(outerTapeTube);
 
     // Inner Cardboard Core Tube - unreflective matte grey-white paperboard inside wall
@@ -492,21 +513,23 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     const innerCardboardTube = new THREE.Mesh(innerTubeGeo, cardboardMat);
     innerCardboardTube.name = 'innerCardboardTube';
     innerCardboardTube.castShadow = true;
-    innerCardboardTube.receiveShadow = true;
+    innerCardboardTube.receiveShadow = false; // Disable to prevent dark core shadow overlap artifacts
     rollInnerMesh.add(innerCardboardTube);
 
     // Side Rings Caps - realistic concentric layers with bump & roughness variance
     const sideCapMat = new THREE.MeshStandardMaterial({
       map: rollSideTexRef.current,
       bumpMap: rollSideBumpTexRef.current || null,
-      bumpScale: 0.12, // High-frequency fiber/layer grain
+      bumpScale: 0.06, // High-frequency fiber/layer grain (reduced for silkiness)
       roughnessMap: rollSideRoughnessTexRef.current || null,
       roughness: 0.95, // Matte rough paper side edge
       metalness: 0.0, // Completely matte
       color: new THREE.Color('#FFFFFF'), // Clean cool white / light cool grey tone
       side: THREE.DoubleSide,
+      emissive: new THREE.Color('#666666'), // Keep the roll sides luminous
+      emissiveMap: rollSideTexRef.current || null,
     });
-    sideCapMat.normalScale.set(2.5, 2.5); // Boost normalScale as requested to maximize fiber weaving look (2.5, 2.5)
+    sideCapMat.normalScale.set(1.5, 1.5); // Gently boost normalScale for soft realistic fiber depth
 
     // Left Ring Cap
     const leftCapGeo = new THREE.RingGeometry(CORE_RADIUS, INITIAL_RADIUS, 64);
@@ -528,20 +551,26 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       map: tapePatternTexRef.current,
       bumpMap: tapeBumpTexRef.current,
       bumpScale: 0.015,
-      roughness: 0.88, // Dry matte paper feel
+      roughness: 0.9, // High-roughness matte paper as requested
       metalness: 0.0, // Completely non-reflective
       color: new THREE.Color('#FFFFFF'), // Clean cool white / light cool grey tone
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 1.0,
-      emissive: new THREE.Color('#3a3a3a'), // Keep unrolled trail pattern bright and high contrast
+      emissive: new THREE.Color('#151515'), // Lower emissive to keep patterns highly vibrant and saturated
       emissiveMap: tapePatternTexRef.current,
     });
     trailMat.normalScale.set(0.2, 0.2); // Set weak normalScale for paper micro-grain
-    const trailGeo = new THREE.BufferGeometry();
+    trailMat.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        /float\s+dotNL\s*=\s*saturate\s*\(\s*dot\s*\(\s*(geometry\.normal|geometryNormal)\s*,\s*directLight\.direction\s*\)\s*\)\s*;/g,
+        'float dotNL = smoothstep( -0.35, 1.0, dot( $1, directLight.direction ) ) * 0.8 + 0.2;'
+      );
+    };
+        const trailGeo = new THREE.BufferGeometry();
     const trailMesh = new THREE.Mesh(trailGeo, trailMat);
     trailMesh.castShadow = true;
-    trailMesh.receiveShadow = true;
+    trailMesh.receiveShadow = false; // Disabled to 100% eliminate dark grey blocky self-shadowing artifacts on overlapping folds/wrinkles
     scene.add(trailMesh);
     trailMeshRef.current = trailMesh;
 
@@ -587,8 +616,64 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
 
     // Event Listeners
     const onMouseDown = (e: MouseEvent) => {
-      isDragging.current = true;
-      updateTargetPositionFromMouse(e.clientX, e.clientY);
+      if (e.button === 0) { // Left-click
+        isDragging.current = true;
+        updateTargetPositionFromMouse(e.clientX, e.clientY);
+      }
+    };
+
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault(); // Prevent standard browser right-click menu
+
+      if (isCameraFocusedRef.current) {
+        // If already focused, right-click anywhere restores the normal view
+        targetCameraPosRef.current.set(4.8, 13.5, 9.2);
+        targetCameraLookAtRef.current.set(0, 0.95, 0);
+        isCameraFocusedRef.current = false;
+        return;
+      }
+
+      if (!containerRef.current || !cameraRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const clickX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const clickY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycaster.setFromCamera(new THREE.Vector2(clickX, clickY), cameraRef.current);
+      const intersects = raycaster.intersectObject(rayPlane);
+      if (intersects.length > 0) {
+        const hitPoint = intersects[0].point;
+        let minDistance = Infinity;
+        let closestPoint = new THREE.Vector3();
+
+        if (rollGroupRef.current) {
+          const rollPos = rollGroupRef.current.position;
+          const dRoll = Math.sqrt(Math.pow(hitPoint.x - rollPos.x, 2) + Math.pow(hitPoint.z - rollPos.z, 2));
+          if (dRoll < minDistance) {
+            minDistance = dRoll;
+            closestPoint.copy(rollPos);
+          }
+        }
+
+        for (const pt of pathPoints.current) {
+          const dPt = Math.sqrt(Math.pow(hitPoint.x - pt.x, 2) + Math.pow(hitPoint.z - pt.z, 2));
+          if (dPt < minDistance) {
+            minDistance = dPt;
+            closestPoint.set(pt.x, pt.y, pt.z);
+          }
+        }
+
+        // Focus camera closer to the closest pattern/roll point if clicked within 1.5 units
+        if (minDistance < 1.5) {
+          // Align the zoom focus along the exact same oblique direction as the main view
+          // to completely avoid lookAt singularities, camera twisting, or perspective distortion.
+          // Zoom to a comfortable distance of 4.2 units so the pattern is perfectly centered, visible, and distortion-free!
+          const obliqueDir = new THREE.Vector3(4.8, 12.55, 9.2).normalize();
+          const relativeOffset = obliqueDir.multiplyScalar(4.2);
+          targetCameraPosRef.current.copy(closestPoint).add(relativeOffset);
+          targetCameraLookAtRef.current.copy(closestPoint);
+          isCameraFocusedRef.current = true;
+        }
+      }
     };
 
     const onMouseMove = (e: MouseEvent) => {
@@ -604,7 +689,9 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length > 0) {
         isDragging.current = true;
-        updateTargetPositionFromMouse(e.touches[0].clientX, e.touches[0].clientY);
+        const touchX = e.touches[0].clientX;
+        const touchY = e.touches[0].clientY;
+        updateTargetPositionFromMouse(touchX, touchY);
       }
     };
 
@@ -621,6 +708,7 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
 
     const containerEl = containerRef.current;
     containerEl.addEventListener('mousedown', onMouseDown);
+    containerEl.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
 
@@ -689,10 +777,50 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       const width = configRef.current.width * 1.3; // 1.3x width scale
 
       const cellPitch = width; // Perfect 1:1 cell aspect ratio matching the 1024x128 texture slots
-      const patternScale = cellPitch * 8; // 8 slots in the texture
+      const patternScale = cellPitch * 4; // 4 slots in the texture
 
-      for (let i = 0; i < pts.length; i++) {
-        const pt = pts[i];
+      // Apply a Gaussian-weighted running average to path points and normals to make corners and turns ultra-smooth and eliminate hard folds
+      const smoothedPts = pts.map((pt, idx) => {
+        if (idx < 2 || idx > pts.length - 3) {
+          return { ...pt }; // Keep the start and active drawing tip completely anchored and precise
+        }
+        let sumX = 0, sumY = 0, sumZ = 0;
+        let sumNx = 0, sumNz = 0;
+        let totalWeight = 0;
+
+        const windowSize = 3; // Window of 7 points
+        for (let offset = -windowSize; offset <= windowSize; offset++) {
+          const neighborIdx = idx + offset;
+          if (neighborIdx >= 0 && neighborIdx < pts.length) {
+            const dist = Math.abs(offset);
+            const weight = Math.exp(-dist * dist / 4.5); // Gaussian bell curve weights
+            sumX += pts[neighborIdx].x * weight;
+            sumY += pts[neighborIdx].y * weight;
+            sumZ += pts[neighborIdx].z * weight;
+            sumNx += pts[neighborIdx].nx * weight;
+            sumNz += pts[neighborIdx].nz * weight;
+            totalWeight += weight;
+          }
+        }
+
+        const rawNx = sumNx / totalWeight;
+        const rawNz = sumNz / totalWeight;
+        const len = Math.sqrt(rawNx * rawNx + rawNz * rawNz);
+        const normNx = len > 0.0001 ? rawNx / len : rawNx;
+        const normNz = len > 0.0001 ? rawNz / len : rawNz;
+
+        return {
+          ...pt,
+          x: sumX / totalWeight,
+          y: sumY / totalWeight,
+          z: sumZ / totalWeight,
+          nx: normNx,
+          nz: normNz,
+        };
+      });
+
+      for (let i = 0; i < smoothedPts.length; i++) {
+        const pt = smoothedPts[i];
 
         // Normal offsets on XZ plane perpendicular to movement vector
         const ox = pt.nx * (width / 2);
@@ -814,13 +942,13 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
     const tick = () => {
       // Smooth Follow logic: Ease the tape roll towards the target position
       const currentConfig = configRef.current;
-      const easing = 0.12;
+      const easing = 0.45; // Increased responsiveness / snappier movement sensitivity as requested
 
       // Keep the tape roll radius constant at its initial size during the rolling process
-      const currentRadius = INITIAL_RADIUS;
+      const currentRadius = INITIAL_RADIUS * SCALE_FACTOR;
 
       // Update 3D roll geometry dimensions and scales to dynamically match config.width on every frame
-      const shrinkScale = currentRadius / INITIAL_RADIUS;
+      const shrinkScale = currentRadius / (INITIAL_RADIUS * SCALE_FACTOR);
       outerTapeTube.scale.set(shrinkScale, shrinkScale, 1);
       sideCapLeft.scale.set(shrinkScale, shrinkScale, 1);
       sideCapRight.scale.set(shrinkScale, shrinkScale, 1);
@@ -836,7 +964,7 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
         const circ = 2 * Math.PI * currentRadius;
         const width = currentConfig.width * 1.3;
         const cellPitch = width; // Matching rebuildTrailMesh exactly
-        const patternScale = cellPitch * 8; // Matching rebuildTrailMesh exactly
+        const patternScale = cellPitch * 4; // Matching rebuildTrailMesh exactly (4 slots)
         rollTapePatternTexRef.current.repeat.set(circ / patternScale, 1.0);
 
         // Align the texture offset so that the bottom touch point of the cylinder perfectly matches the unrolled trail pattern
@@ -942,6 +1070,11 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       // Rebuild the dynamic trail ribbon on every frame to ensure the transition is 100% gapless and smooth
       rebuildTrailMesh();
 
+      // Smoothly interpolate camera position and lookAt target for cinematic focus/restore effects
+      camera.position.lerp(targetCameraPosRef.current, 0.08);
+      currentCameraLookAtRef.current.lerp(targetCameraLookAtRef.current, 0.08);
+      camera.lookAt(currentCameraLookAtRef.current);
+
       renderer.render(scene, camera);
       animationFrameId = requestAnimationFrame(tick);
     };
@@ -955,6 +1088,7 @@ export const TapeWorkspace: React.FC<TapeWorkspaceProps> = ({
       resizeObserver.disconnect();
       if (containerEl) {
         containerEl.removeEventListener('mousedown', onMouseDown);
+        containerEl.removeEventListener('contextmenu', onContextMenu);
         containerEl.removeEventListener('touchstart', onTouchStart);
       }
       window.removeEventListener('mousemove', onMouseMove);

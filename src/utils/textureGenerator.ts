@@ -1,812 +1,247 @@
 import { TapePattern, DeskMaterial, COLORS } from '../types';
 
 /**
- * Procedurally generates an HTMLCanvasElement with the requested Washi tape pattern.
- * Supports custom uploaded images which are rendered in a repeating elegant stamp layout.
+ * Boosts the saturation of an RGB color by converting to HSL,
+ * increasing the S channel, and converting back to RGB.
  */
-export function generateTapePattern(pattern: TapePattern, customImages?: HTMLImageElement[]): HTMLCanvasElement {
+function boostColorSaturation(r: number, g: number, b: number): { r: number; g: number; b: number } {
+  const rNorm = r / 255;
+  const gNorm = g / 255;
+  const bNorm = b / 255;
+
+  const max = Math.max(rNorm, gNorm, bNorm);
+  const min = Math.min(rNorm, gNorm, bNorm);
+  let h = 0;
+  let s = 0;
+  const l = (max + min) / 2;
+
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case rNorm: h = (gNorm - bNorm) / d + (gNorm < bNorm ? 6 : 0); break;
+      case gNorm: h = (bNorm - rNorm) / d + 2; break;
+      case bNorm: h = (rNorm - gNorm) / d + 4; break;
+    }
+    h /= 6;
+  }
+
+  // Boost saturation component by 25% for extra vibrancy, capped at 1.0
+  s = Math.min(1.0, s * 1.25);
+  // Keep the lightness slightly deeper/richer
+  const adjustedL = Math.max(0.1, Math.min(0.9, l * 0.96));
+
+  let rRes = adjustedL, gRes = adjustedL, bRes = adjustedL;
+  if (s !== 0) {
+    const hue2rgb = (p: number, q: number, t: number) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+
+    const q = adjustedL < 0.5 ? adjustedL * (1 + s) : adjustedL + s - adjustedL * s;
+    const p = 2 * adjustedL - q;
+    rRes = hue2rgb(p, q, h + 1/3);
+    gRes = hue2rgb(p, q, h);
+    bRes = hue2rgb(p, q, h - 1/3);
+  }
+
+  return {
+    r: Math.round(rRes * 255),
+    g: Math.round(gRes * 255),
+    b: Math.round(bRes * 255)
+  };
+}
+
+/**
+ * Processes an input image to create a high-fidelity 1-to-1 red stamp.
+ * 1. Filters out white background to transparent (with high brightness tolerance).
+ * 2. Recolors the non-transparent pixels to gorgeous vermilion stamp red.
+ * 3. Applies a noise map to create organic, pressure-uneven dry spots (露白/斑驳) and fuzzy bleed edges (毛刺).
+ */
+function preprocessStampImage(
+  img: HTMLImageElement,
+  targetWidth: number,
+  targetHeight: number,
+  stampColor: string = '#E61919'
+): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
-  canvas.width = 1024; // Fixed 1024px width for perfect stability and alignment
-  canvas.height = 128;
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
   const ctx = canvas.getContext('2d');
   if (!ctx) return canvas;
 
-  // Reusable Rounded Rectangle path helper
-  const drawRoundedRect = (
-    c: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    r: number
-  ) => {
-    c.beginPath();
-    c.moveTo(x + r, y);
-    c.lineTo(x + w - r, y);
-    c.quadraticCurveTo(x + w, y, x + w, y + r);
-    c.lineTo(x + w, y + h - r);
-    c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    c.lineTo(x + r, y + h);
-    c.quadraticCurveTo(x, y + h, x, y + h - r);
-    c.lineTo(x, y + r);
-    c.quadraticCurveTo(x, y, x + r, y);
-    c.closePath();
-  };
+  // Use high-quality image scaling
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
 
-  // Reusable Arch shape path helper
-  const drawArch = (c: CanvasRenderingContext2D, cx: number, cy: number, w: number, h: number, r: number) => {
-    const x = cx - w / 2;
-    const y = cy - h / 2;
-    c.beginPath();
-    c.moveTo(x, y + h);
-    c.lineTo(x, y + r);
-    c.quadraticCurveTo(x, y, x + r, y);
-    c.lineTo(x + w - r, y);
-    c.quadraticCurveTo(x + w, y, x + w, y + r);
-    c.lineTo(x + w, y + h);
-    c.closePath();
-  };
+  // Fit the image in the target box with padding while strictly preserving 1:1 original aspect ratio
+  const imgW = img.width || 64;
+  const imgH = img.height || 64;
+  const maxDim = Math.min(targetWidth, targetHeight) * 0.85; // Elegant padding for clear visibility
+  const scale = Math.min(maxDim / imgW, maxDim / imgH);
+  const w = imgW * scale;
+  const h = imgH * scale;
+  const x = (targetWidth - w) / 2;
+  const y = (targetHeight - h) / 2;
 
-  // Reusable Hexagon path helper
-  const drawHexagon = (c: CanvasRenderingContext2D, cx: number, cy: number, r: number) => {
-    c.beginPath();
-    for (let j = 0; j < 6; j++) {
-      const angle = (j * Math.PI) / 3;
-      const hx = cx + Math.cos(angle) * r;
-      const hy = cy + Math.sin(angle) * r;
-      if (j === 0) c.moveTo(hx, hy);
-      else c.lineTo(hx, hy);
+  // Draw onto offscreen canvas
+  ctx.drawImage(img, x, y, w, h);
+
+  // Read pixels for high-quality stamp simulation
+  let imgData;
+  try {
+    imgData = ctx.getImageData(0, 0, targetWidth, targetHeight);
+  } catch (e) {
+    // Cross-origin fallback
+    return canvas;
+  }
+  const data = imgData.data;
+
+  // Hex to RGB conversion
+  let rStamp = 200, gStamp = 60, bStamp = 60;
+  if (stampColor.startsWith('#')) {
+    const hex = stampColor.substring(1);
+    if (hex.length === 6) {
+      rStamp = parseInt(hex.substring(0, 2), 16);
+      gStamp = parseInt(hex.substring(2, 4), 16);
+      bStamp = parseInt(hex.substring(4, 6), 16);
+    } else if (hex.length === 3) {
+      rStamp = parseInt(hex[0] + hex[0], 16);
+      gStamp = parseInt(hex[1] + hex[1], 16);
+      bStamp = parseInt(hex[2] + hex[2], 16);
     }
-    c.closePath();
-  };
+  }
 
-  // Reusable Octagon path helper
-  const drawOctagon = (c: CanvasRenderingContext2D, cx: number, cy: number, r: number) => {
-    c.beginPath();
-    for (let j = 0; j < 8; j++) {
-      const angle = (j * Math.PI) / 4;
-      const hx = cx + Math.cos(angle) * r;
-      const hy = cy + Math.sin(angle) * r;
-      if (j === 0) c.moveTo(hx, hy);
-      else c.lineTo(hx, hy);
+  // Boost color saturation and depth mathematically to make the pattern incredibly vibrant
+  const boosted = boostColorSaturation(rStamp, gStamp, bStamp);
+
+  const newData = new Uint8ClampedArray(data.length);
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const a = data[i + 3];
+
+    // Compute luminance
+    const brightness = (r * 0.299 + g * 0.587 + b * 0.114);
+
+    // If it's a white or light background pixel, make it completely transparent
+    if (brightness > 240 || a < 10) {
+      newData[i] = 0;
+      newData[i + 1] = 0;
+      newData[i + 2] = 0;
+      newData[i + 3] = 0;
+    } else {
+      // It's an ink pixel! Calculate the ink density based on darkness.
+      const inkDensity = (240 - brightness) / 240.0;
+      // Boost the opacity slightly from 3.2 to 4.2 to render more solid, vivid ink
+      const alphaFactor = (a / 255.0) * Math.min(1.0, inkDensity * 4.2);
+
+      // Keep it crisp and beautifully anti-aliased without any destructive random noise or fuzzy erosion
+      newData[i] = boosted.r;
+      newData[i + 1] = boosted.g;
+      newData[i + 2] = boosted.b;
+      newData[i + 3] = Math.round(alphaFactor * 255);
     }
-    c.closePath();
-  };
+  }
 
-  // Reusable Diamond path helper
-  const drawDiamond = (c: CanvasRenderingContext2D, cx: number, cy: number, r: number) => {
-    c.beginPath();
-    c.moveTo(cx, cy - r);
-    c.lineTo(cx + r, cy);
-    c.lineTo(cx, cy + r);
-    c.lineTo(cx - r, cy);
-    c.closePath();
-  };
+  const newImgData = new ImageData(newData, targetWidth, targetHeight);
+  ctx.putImageData(newImgData, 0, 0);
 
-  // Reusable star path helper
-  const drawStar = (c: CanvasRenderingContext2D, cx: number, cy: number, spikes: number, outerRadius: number, innerRadius: number) => {
-    let rot = (Math.PI / 2) * 3;
-    let sx = cx;
-    let sy = cy;
-    const step = Math.PI / spikes;
+  return canvas;
+}
 
-    c.beginPath();
-    c.moveTo(cx, cy - outerRadius);
-    for (let j = 0; j < spikes; j++) {
-      sx = cx + Math.cos(rot) * outerRadius;
-      sy = cy + Math.sin(rot) * outerRadius;
-      c.lineTo(sx, sy);
-      rot += step;
+/**
+ * Procedurally generates an HTMLCanvasElement with the requested Washi tape pattern.
+ * Supports custom uploaded images which are rendered in a repeating elegant stamp layout.
+ */
+/**
+ * Procedurally generates an HTMLCanvasElement with the requested Washi tape pattern.
+ * Supports custom uploaded images which are rendered in a repeating elegant stamp layout.
+ */
+export function generateTapePattern(
+  pattern: TapePattern,
+  customImages?: HTMLImageElement[],
+  tapeColor: string = '#E61919'
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  // Highly increased to 8192px x 2048px for crystal-clear pattern rendering!
+  canvas.width = 8192;
+  canvas.height = 2048;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return canvas;
 
-      sx = cx + Math.cos(rot) * innerRadius;
-      sy = cy + Math.sin(rot) * innerRadius;
-      c.lineTo(sx, sy);
-      rot += step;
-    }
-    c.lineTo(cx, cy - outerRadius);
-    c.closePath();
-  };
+  // Use highest-quality image scaling
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
 
-  // Reusable crescent moon path helper
-  const drawCrescentMoon = (c: CanvasRenderingContext2D, cx: number, cy: number, radius: number) => {
-    c.beginPath();
-    c.arc(cx, cy, radius, Math.PI * 0.5, Math.PI * 1.5, false);
-    // Draw an inner curve to create a crescent
-    c.quadraticCurveTo(cx + radius * 0.4, cy, cx, cy + radius);
-    c.closePath();
-  };
-
-  // Clean, high quality matte off-white washi paper base
-  ctx.fillStyle = COLORS.tapeBaseColor; // Warm white paper base
+  // 1. Clean, cold-white washi paper base background (冷白纸张质感)
+  ctx.fillStyle = '#FAF9F6'; // Beautiful off-white / light neutral cold paper
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Very subtle edge stitching/lines representing a beautiful stationary tape carrier
+  // Very subtle fine side deckle edge texture lines
   ctx.strokeStyle = '#ECE9E2';
-  ctx.lineWidth = 1;
+  ctx.lineWidth = 16; // Scaled for high resolution
   ctx.beginPath();
-  ctx.moveTo(0, 4);
-  ctx.lineTo(canvas.width, 4);
-  ctx.moveTo(0, canvas.height - 4);
-  ctx.lineTo(canvas.width, canvas.height - 4);
+  ctx.moveTo(0, 32);
+  ctx.lineTo(canvas.width, 32);
+  ctx.moveTo(0, canvas.height - 32);
+  ctx.lineTo(canvas.width, canvas.height - 32);
   ctx.stroke();
 
-  const numSlots = 8;
-  const slotWidth = 1024 / numSlots; // exactly 128px per slot
+  // If custom images are provided, draw them sequentially in a horizontal linear looping layout (4 slots)
+  if (customImages && customImages.length > 0) {
+    const numSlots = 4;
+    const slotWidth = 8192 / numSlots; // exactly 2048px wide per slot, making each slot a perfect 1:1 square!
 
-  for (let i = 0; i < numSlots; i++) {
-    const cx = i * slotWidth + slotWidth / 2;
-    const cy = 64;
+    for (let i = 0; i < numSlots; i++) {
+      const cx = i * slotWidth + slotWidth / 2;
+      const cy = 1024;
 
-    const cardSize = 76; // Reduced from 108 to make gaps/spacing between patterns larger and elegant
-    const cardX = i * slotWidth + (slotWidth - cardSize) / 2; // Perfectly centered horizontally
-    const cardY = (128 - cardSize) / 2; // Perfectly centered vertically
-    const cardRadius = 8;
+      // Select image in loop (img1 -> img2 -> img3 -> img4)
+      const img = customImages[i % customImages.length];
 
-    // 1. Draw elegant sticker card base (die-cut white paper sticker segment)
-    ctx.save();
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.05)';
-    ctx.shadowBlur = 5;
-    ctx.shadowOffsetY = 2;
+      // Preprocess image to have absolute white-removed stamp-ink quality
+      const stampCanvas = preprocessStampImage(img, 2048, 2048, tapeColor);
 
-    ctx.fillStyle = '#FFFFFF';
-    drawRoundedRect(ctx, cardX, cardY, cardSize, cardSize, cardRadius);
-    ctx.fill();
-
-    // Reset shadow
-    ctx.shadowColor = 'transparent';
-
-    ctx.strokeStyle = '#E6E1D8';
-    ctx.lineWidth = 1;
-    drawRoundedRect(ctx, cardX, cardY, cardSize, cardSize, cardRadius);
-    ctx.stroke();
-    ctx.restore();
-
-    // Determine sequence index (1, 2, 3, 4 loop)
-    const idx = i % 4;
-
-    // Draw inner graphics based on the selected pattern
-    switch (pattern) {
-      case 'sage_gold': {
-        const sageColor = '#8DA08A';
-        
-        // Generate beautiful gold gradient for foil illustrations
-        const goldGrad = ctx.createLinearGradient(cx - 30, cy - 30, cx + 30, cy + 30);
-        goldGrad.addColorStop(0, '#E8C560');
-        goldGrad.addColorStop(0.5, '#F9E29C');
-        goldGrad.addColorStop(1, '#D6AA33');
-
-        ctx.save();
-        if (idx === 0) {
-          // Card 1: Circular badge with golden branches
-          ctx.fillStyle = sageColor;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 40, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.strokeStyle = goldGrad;
-          ctx.lineWidth = 2;
-          ctx.stroke();
-
-          // Golden twig
-          ctx.lineWidth = 2.2;
-          ctx.beginPath();
-          ctx.moveTo(cx - 18, cy + 18);
-          ctx.quadraticCurveTo(cx - 2, cy + 2, cx + 18, cy - 18);
-          ctx.stroke();
-
-          // Golden leaves
-          ctx.fillStyle = goldGrad;
-          ctx.beginPath();
-          ctx.ellipse(cx - 10, cy + 10, 7, 3, Math.PI / 4, 0, Math.PI * 2);
-          ctx.ellipse(cx + 3, cy - 3, 7, 3, Math.PI / 4, 0, Math.PI * 2);
-          ctx.ellipse(cx + 14, cy - 14, 5, 2, Math.PI / 4, 0, Math.PI * 2);
-          ctx.fill();
-        } else if (idx === 1) {
-          // Card 2: Rounded square with Monstera Leaf outline
-          ctx.fillStyle = sageColor;
-          drawRoundedRect(ctx, cx - 40, cy - 40, 80, 80, 10);
-          ctx.fill();
-
-          ctx.strokeStyle = goldGrad;
-          ctx.lineWidth = 1.5;
-          drawRoundedRect(ctx, cx - 40, cy - 40, 80, 80, 10);
-          ctx.stroke();
-
-          // Elegant Monstera / Maple Leaf drawing
-          ctx.strokeStyle = goldGrad;
-          ctx.fillStyle = goldGrad;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(cx - 22, cy + 22);
-          ctx.lineTo(cx + 22, cy - 22); // Main vein
-          ctx.stroke();
-
-          // Draw leaves segments
-          ctx.beginPath();
-          ctx.arc(cx - 2, cy - 2, 18, -Math.PI / 4, Math.PI / 2);
-          ctx.arc(cx + 6, cy + 6, 18, Math.PI * 0.75, Math.PI * 1.5);
-          ctx.fill();
-        } else if (idx === 2) {
-          // Card 3: Hexagon badge with Tulip
-          ctx.fillStyle = sageColor;
-          drawHexagon(ctx, cx, cy, 40);
-          ctx.fill();
-
-          ctx.strokeStyle = goldGrad;
-          ctx.lineWidth = 1.5;
-          drawHexagon(ctx, cx, cy, 40);
-          ctx.stroke();
-
-          // Tulip illustration
-          ctx.strokeStyle = goldGrad;
-          ctx.fillStyle = goldGrad;
-          ctx.lineWidth = 2;
-          // Stem
-          ctx.beginPath();
-          ctx.moveTo(cx, cy + 24);
-          ctx.quadraticCurveTo(cx - 6, cy + 8, cx, cy - 4);
-          ctx.stroke();
-
-          // Leaf
-          ctx.beginPath();
-          ctx.ellipse(cx - 12, cy + 12, 12, 4, -Math.PI / 6, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Flower petals
-          ctx.beginPath();
-          ctx.arc(cx, cy - 12, 10, 0, Math.PI, true);
-          ctx.closePath();
-          ctx.fill();
-
-          ctx.beginPath();
-          ctx.moveTo(cx - 10, cy - 12);
-          ctx.lineTo(cx - 5, cy - 24);
-          ctx.lineTo(cx, cy - 14);
-          ctx.lineTo(cx + 5, cy - 24);
-          ctx.lineTo(cx + 10, cy - 12);
-          ctx.closePath();
-          ctx.fill();
-        } else {
-          // Card 4: Arch shape with Ginkgo leaf
-          ctx.fillStyle = sageColor;
-          drawArch(ctx, cx, cy, 80, 80, 40);
-          ctx.fill();
-
-          ctx.strokeStyle = goldGrad;
-          ctx.lineWidth = 1.5;
-          drawArch(ctx, cx, cy, 80, 80, 40);
-          ctx.stroke();
-
-          // Ginkgo leaf fan shape
-          ctx.fillStyle = goldGrad;
-          ctx.strokeStyle = goldGrad;
-          ctx.lineWidth = 2;
-
-          // Stem
-          ctx.beginPath();
-          ctx.moveTo(cx - 15, cy + 25);
-          ctx.quadraticCurveTo(cx - 5, cy + 15, cx, cy + 5);
-          ctx.stroke();
-
-          // Fan
-          ctx.beginPath();
-          ctx.moveTo(cx, cy + 5);
-          ctx.bezierCurveTo(cx - 28, cy - 15, cx - 24, cy - 30, cx - 5, cy - 20);
-          ctx.lineTo(cx, cy - 12); // Split in ginkgo leaf
-          ctx.bezierCurveTo(cx + 24, cy - 30, cx + 28, cy - 15, cx, cy + 5);
-          ctx.closePath();
-          ctx.fill();
-        }
-        ctx.restore();
-        break;
+      // Draw onto tape pattern canvas
+      ctx.drawImage(stampCanvas, cx - 1024, cy - 1024);
+    }
+  } else {
+    // Elegant procedural fallback while preloading or if no images
+    const numSlots = 4;
+    const slotWidth = 8192 / numSlots;
+    for (let i = 0; i < numSlots; i++) {
+      const cx = i * slotWidth + slotWidth / 2;
+      const cy = 1024;
+      ctx.save();
+      ctx.strokeStyle = tapeColor;
+      ctx.lineWidth = 64; // Scaled up to match 2048px resolution
+      if (i % 2 === 0) {
+        // Draw elegant traditional square stamp frame
+        ctx.strokeRect(cx - 480, cy - 480, 960, 960);
+        ctx.fillStyle = tapeColor;
+        ctx.font = 'bold 320px serif'; // Scaled up to match 1024px resolution (now 2048px)
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('和纸', cx, cy);
+      } else {
+        // Draw elegant traditional circular stamp frame
+        ctx.beginPath();
+        ctx.arc(cx, cy, 512, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = tapeColor;
+        ctx.font = 'bold 320px serif'; // Scaled up to match 1024px resolution (now 2048px)
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('印章', cx, cy);
       }
-
-      case 'terracotta_geo': {
-        const terraColor = '#C46A52';
-        const creamColor = '#FDFBF7';
-        const charcoalColor = '#3E3E3E';
-
-        ctx.save();
-        if (idx === 0) {
-          // Card 1: Arch with Boho Sun
-          ctx.fillStyle = terraColor;
-          drawArch(ctx, cx, cy, 80, 80, 40);
-          ctx.fill();
-
-          // Cream smaller arch
-          ctx.fillStyle = creamColor;
-          drawArch(ctx, cx, cy + 15, 50, 50, 25);
-          ctx.fill();
-
-          // Charcoal sun
-          ctx.fillStyle = charcoalColor;
-          ctx.beginPath();
-          ctx.arc(cx, cy - 12, 10, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Sun ray dashes
-          ctx.strokeStyle = creamColor;
-          ctx.lineWidth = 1.5;
-          for (let r = 0; r < 8; r++) {
-            const angle = (r * Math.PI) / 4;
-            const x1 = cx + Math.cos(angle) * 14;
-            const y1 = cy - 12 + Math.sin(angle) * 14;
-            const x2 = cx + Math.cos(angle) * 20;
-            const y2 = cy - 12 + Math.sin(angle) * 20;
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.stroke();
-          }
-        } else if (idx === 1) {
-          // Card 2: Circle with Moon and Stars
-          ctx.fillStyle = terraColor;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 40, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Cream crescent moon
-          ctx.fillStyle = creamColor;
-          drawCrescentMoon(ctx, cx - 5, cy, 20);
-          ctx.fill();
-
-          // Charcoal stars
-          ctx.fillStyle = charcoalColor;
-          drawStar(ctx, cx + 18, cy - 12, 4, 6, 2.5);
-          ctx.fill();
-          drawStar(ctx, cx + 12, cy + 14, 4, 4, 1.5);
-          ctx.fill();
-        } else if (idx === 2) {
-          // Card 3: Rounded Square with Mountains
-          ctx.fillStyle = terraColor;
-          drawRoundedRect(ctx, cx - 40, cy - 40, 80, 80, 10);
-          ctx.fill();
-
-          // Mountain 1 (Charcoal, larger, back)
-          ctx.fillStyle = charcoalColor;
-          ctx.beginPath();
-          ctx.moveTo(cx - 30, cy + 40);
-          ctx.lineTo(cx + 5, cy - 10);
-          ctx.lineTo(cx + 40, cy + 40);
-          ctx.closePath();
-          ctx.fill();
-
-          // Mountain 2 (Cream, front)
-          ctx.fillStyle = creamColor;
-          ctx.beginPath();
-          ctx.moveTo(cx - 40, cy + 40);
-          ctx.lineTo(cx - 10, cy + 5);
-          ctx.lineTo(cx + 20, cy + 40);
-          ctx.closePath();
-          ctx.fill();
-
-          // Small Cream Sun
-          ctx.fillStyle = creamColor;
-          ctx.beginPath();
-          ctx.arc(cx + 18, cy - 16, 7, 0, Math.PI * 2);
-          ctx.fill();
-        } else {
-          // Card 4: Diamond with Balancing Stones
-          ctx.fillStyle = terraColor;
-          drawDiamond(ctx, cx, cy, 40);
-          ctx.fill();
-
-          // Draw vertical stack of balanced smooth pebbles
-          // Bottom stone: Cream oval
-          ctx.fillStyle = creamColor;
-          ctx.beginPath();
-          ctx.ellipse(cx, cy + 18, 22, 9, 0, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Middle stone: Charcoal oval
-          ctx.fillStyle = charcoalColor;
-          ctx.beginPath();
-          ctx.ellipse(cx - 2, cy, 16, 7, -0.05, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Top stone: Warm ochre yellow
-          ctx.fillStyle = '#D4A359';
-          ctx.beginPath();
-          ctx.ellipse(cx + 1, cy - 14, 10, 5, 0.08, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.restore();
-        break;
-      }
-
-      case 'indigo_constellation': {
-        const indigoColor = '#1B2232';
-        const goldColor = '#FCE3A1';
-        const whiteColor = '#FFFFFF';
-
-        ctx.save();
-        if (idx === 0) {
-          // Card 1: Circle with Big Dipper
-          ctx.fillStyle = indigoColor;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 40, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.strokeStyle = 'rgba(252, 227, 161, 0.4)';
-          ctx.lineWidth = 1.2;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 40, 0, Math.PI * 2);
-          ctx.stroke();
-
-          // Constellation stars & lines
-          const stars = [
-            { x: cx - 24, y: cy + 15 },
-            { x: cx - 12, y: cy + 8 },
-            { x: cx, y: cy + 12 },
-            { x: cx + 10, y: cy },
-            { x: cx + 5, y: cy - 15 },
-            { x: cx + 22, y: cy - 20 },
-            { x: cx + 24, y: cy - 4 }
-          ];
-
-          // Draw lines
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-          ctx.lineWidth = 0.8;
-          ctx.beginPath();
-          ctx.moveTo(stars[0].x, stars[0].y);
-          for (let s = 1; s < stars.length; s++) {
-            ctx.lineTo(stars[s].x, stars[s].y);
-          }
-          ctx.stroke();
-
-          // Draw stars
-          ctx.fillStyle = goldColor;
-          for (const s of stars) {
-            ctx.beginPath();
-            ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2);
-            ctx.fill();
-            
-            // tiny flares
-            ctx.strokeStyle = 'rgba(252, 227, 161, 0.6)';
-            ctx.lineWidth = 0.5;
-            ctx.beginPath();
-            ctx.moveTo(s.x - 4, s.y); ctx.lineTo(s.x + 4, s.y);
-            ctx.moveTo(s.x, s.y - 4); ctx.lineTo(s.x, s.y + 4);
-            ctx.stroke();
-          }
-        } else if (idx === 1) {
-          // Card 2: Rounded Square with Saturn
-          ctx.fillStyle = indigoColor;
-          drawRoundedRect(ctx, cx - 40, cy - 40, 80, 80, 10);
-          ctx.fill();
-
-          ctx.strokeStyle = 'rgba(252, 227, 161, 0.4)';
-          ctx.lineWidth = 1.2;
-          drawRoundedRect(ctx, cx - 40, cy - 40, 80, 80, 10);
-          ctx.stroke();
-
-          // Saturn Ring
-          ctx.strokeStyle = whiteColor;
-          ctx.lineWidth = 4;
-          ctx.save();
-          ctx.translate(cx, cy);
-          ctx.rotate(-Math.PI / 6);
-          ctx.beginPath();
-          ctx.ellipse(0, 0, 28, 8, 0, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.restore();
-
-          // Planet body
-          ctx.fillStyle = goldColor;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 14, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Front Ring portion highlight
-          ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-          ctx.lineWidth = 2.5;
-          ctx.save();
-          ctx.translate(cx, cy);
-          ctx.rotate(-Math.PI / 6);
-          ctx.beginPath();
-          ctx.ellipse(0, 0, 28, 8, 0, 0, Math.PI); // Half ring facing front
-          ctx.stroke();
-          ctx.restore();
-
-          // Sparkle star
-          ctx.fillStyle = whiteColor;
-          drawStar(ctx, cx - 22, cy - 22, 4, 5, 1.5);
-          ctx.fill();
-        } else if (idx === 2) {
-          // Card 3: Diamond with Galaxy & Moon
-          ctx.fillStyle = indigoColor;
-          drawDiamond(ctx, cx, cy, 40);
-          ctx.fill();
-
-          ctx.strokeStyle = 'rgba(252, 227, 161, 0.4)';
-          ctx.lineWidth = 1.2;
-          drawDiamond(ctx, cx, cy, 40);
-          ctx.stroke();
-
-          // Spiral galaxy swirl
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          for (let theta = 0; theta < Math.PI * 5; theta += 0.1) {
-            const r = theta * 1.5;
-            const x = cx + Math.cos(theta) * r + 8;
-            const y = cy + Math.sin(theta) * r + 10;
-            if (theta === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-          }
-          ctx.stroke();
-
-          // Golden moon
-          ctx.fillStyle = goldColor;
-          drawCrescentMoon(ctx, cx - 12, cy - 12, 14);
-          ctx.fill();
-
-          // Small stars
-          ctx.fillStyle = whiteColor;
-          drawStar(ctx, cx + 18, cy - 16, 4, 4, 1.2);
-          ctx.fill();
-        } else {
-          // Card 4: Arch with Shooting Star
-          ctx.fillStyle = indigoColor;
-          drawArch(ctx, cx, cy, 80, 80, 40);
-          ctx.fill();
-
-          ctx.strokeStyle = 'rgba(252, 227, 161, 0.4)';
-          ctx.lineWidth = 1.2;
-          drawArch(ctx, cx, cy, 80, 80, 40);
-          ctx.stroke();
-
-          // Tail trails
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.moveTo(cx - 24, cy + 24);
-          ctx.lineTo(cx + 8, cy - 8);
-          ctx.moveTo(cx - 15, cy + 26);
-          ctx.lineTo(cx + 10, cy + 1);
-          ctx.moveTo(cx - 26, cy + 15);
-          ctx.lineTo(cx - 1, cy - 10);
-          ctx.stroke();
-
-          // Shooting star head
-          ctx.fillStyle = goldColor;
-          drawStar(ctx, cx + 12, cy - 12, 4, 9, 3);
-          ctx.fill();
-        }
-        ctx.restore();
-        break;
-      }
-
-      case 'pastel_grid': {
-        const redColor = COLORS.stampRed; // Oriental Vermilion Ink Red
-        const sumiColor = COLORS.stampBlack; // Sumi Ink Black
-
-        ctx.save();
-        if (idx === 0) {
-          // Card 1: Circular double ring seal with branch
-          // Outer red ring
-          ctx.strokeStyle = redColor;
-          ctx.lineWidth = 2.2;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 40, 0, Math.PI * 2);
-          ctx.stroke();
-
-          // Inner thin red ring
-          ctx.lineWidth = 0.8;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 35, 0, Math.PI * 2);
-          ctx.stroke();
-
-          // Sumi black twig
-          ctx.strokeStyle = sumiColor;
-          ctx.lineWidth = 1.8;
-          ctx.beginPath();
-          ctx.moveTo(cx - 16, cy + 14);
-          ctx.quadraticCurveTo(cx - 2, cy, cx + 12, cy - 14);
-          ctx.stroke();
-
-          // Tiny leaf blobs
-          ctx.fillStyle = sumiColor;
-          ctx.beginPath();
-          ctx.arc(cx - 6, cy + 4, 3, 0, Math.PI * 2);
-          ctx.arc(cx + 4, cy - 6, 3, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Red signature block
-          ctx.fillStyle = redColor;
-          ctx.fillRect(cx - 20, cy - 18, 11, 11);
-          ctx.strokeStyle = '#FFFFFF';
-          ctx.lineWidth = 0.8;
-          ctx.beginPath();
-          ctx.moveTo(cx - 17, cy - 13);
-          ctx.lineTo(cx - 12, cy - 13);
-          ctx.moveTo(cx - 15, cy - 15);
-          ctx.lineTo(cx - 15, cy - 10);
-          ctx.stroke();
-        } else if (idx === 1) {
-          // Card 2: Square border with Bamboo Sumi
-          ctx.strokeStyle = redColor;
-          ctx.lineWidth = 2;
-          drawRoundedRect(ctx, cx - 40, cy - 40, 80, 80, 4);
-          ctx.stroke();
-
-          ctx.lineWidth = 0.8;
-          drawRoundedRect(ctx, cx - 35, cy - 35, 70, 70, 2);
-          ctx.stroke();
-
-          // Black bamboo stalk & leaves
-          ctx.strokeStyle = sumiColor;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          // Main stalk
-          ctx.moveTo(cx - 10, cy + 30);
-          ctx.quadraticCurveTo(cx - 8, cy, cx - 5, cy - 30);
-          ctx.stroke();
-
-          // Bamboo segments
-          ctx.fillStyle = '#FFFFFF';
-          ctx.strokeStyle = sumiColor;
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.arc(cx - 8.5, cy + 10, 1.5, 0, Math.PI * 2);
-          ctx.arc(cx - 7, cy - 10, 1.5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
-
-          // Bamboo leaves
-          ctx.fillStyle = sumiColor;
-          ctx.beginPath();
-          ctx.ellipse(cx - 10, cy - 2, 10, 3.2, Math.PI / 6, 0, Math.PI * 2);
-          ctx.ellipse(cx + 6, cy - 15, 12, 3.8, -Math.PI / 4, 0, Math.PI * 2);
-          ctx.ellipse(cx + 1, cy + 2, 8, 2.8, -Math.PI / 10, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Little stamp seal
-          ctx.fillStyle = redColor;
-          ctx.beginPath();
-          ctx.arc(cx + 20, cy + 16, 6, 0, Math.PI * 2);
-          ctx.fill();
-        } else if (idx === 2) {
-          // Card 3: Octagonal red border with Mountain Peaks
-          ctx.strokeStyle = redColor;
-          ctx.lineWidth = 1.8;
-          drawOctagon(ctx, cx, cy, 40);
-          ctx.stroke();
-
-          // Mountain outline sumi black
-          ctx.strokeStyle = sumiColor;
-          ctx.lineWidth = 2;
-          ctx.fillStyle = 'rgba(44, 44, 44, 0.05)';
-          ctx.beginPath();
-          ctx.moveTo(cx - 30, cy + 20);
-          ctx.lineTo(cx - 10, cy - 15);
-          ctx.lineTo(cx + 8, cy + 10);
-          ctx.lineTo(cx + 20, cy - 5);
-          ctx.lineTo(cx + 32, cy + 20);
-          ctx.stroke();
-          ctx.fill();
-
-          // Rising Red Sun
-          ctx.fillStyle = redColor;
-          ctx.beginPath();
-          ctx.arc(cx + 14, cy - 16, 7, 0, Math.PI * 2);
-          ctx.fill();
-        } else {
-          // Card 4: Hexagonal border with Lotus flower
-          ctx.strokeStyle = redColor;
-          ctx.lineWidth = 1.8;
-          drawHexagon(ctx, cx, cy, 40);
-          ctx.stroke();
-
-          // Lotus flower Sumi drawing
-          ctx.strokeStyle = sumiColor;
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.04)';
-          ctx.lineWidth = 1.5;
-
-          // Draw lotus petals
-          ctx.beginPath();
-          // Central petal
-          ctx.ellipse(cx, cy, 14, 6, -Math.PI / 2, 0, Math.PI * 2);
-          // Side petals
-          ctx.ellipse(cx - 8, cy + 2, 12, 5, -Math.PI / 3, 0, Math.PI * 2);
-          ctx.ellipse(cx + 8, cy + 2, 12, 5, -Math.PI / 6, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
-
-          // Stem
-          ctx.beginPath();
-          ctx.moveTo(cx, cy + 12);
-          ctx.lineTo(cx, cy + 28);
-          ctx.stroke();
-
-          // Tiny red rectangular seal
-          ctx.fillStyle = redColor;
-          ctx.fillRect(cx - 24, cy + 10, 7, 12);
-        }
-        ctx.restore();
-        break;
-      }
-
-      case 'custom': {
-        if (customImages && customImages.length > 0) {
-          // Retrieve the current image in rotation
-          const img = customImages[i % customImages.length];
-          try {
-            const imgW = img.width || 100;
-            const imgH = img.height || 100;
-            
-            // Fit inside a padded inner square (max size 56x56 to look elegant inside the card)
-            const maxW = 56;
-            const maxH = 56;
-            const scale = Math.min(maxW / imgW, maxH / imgH);
-            const w = imgW * scale;
-            const h = imgH * scale;
-
-            const imgX = cx - w / 2;
-            const imgY = cy - h / 2;
-
-            ctx.save();
-            // Draw a subtle border around the image boundary to make it look like an elegant photo sticker
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.02)';
-            ctx.shadowBlur = 2;
-            ctx.shadowOffsetY = 1;
-
-            ctx.drawImage(img, imgX, imgY, w, h);
-
-            // Fine outer picture outline
-            ctx.strokeStyle = '#F0EDE6';
-            ctx.lineWidth = 1;
-            ctx.strokeRect(imgX, imgY, w, h);
-            ctx.restore();
-          } catch (e) {
-            console.error('Error rendering custom image inside sticker segment:', e);
-          }
-        } else {
-          // Highly-polished placeholder sticker if no custom images uploaded yet
-          ctx.save();
-          ctx.strokeStyle = '#D1C9BE';
-          ctx.lineWidth = 1.2;
-          ctx.setLineDash([4, 4]);
-          
-          // Draw a beautiful inner dashed card frame
-          drawRoundedRect(ctx, cardX + 8, cardY + 8, cardSize - 16, cardSize - 16, 6);
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          // Simple elegant custom vector camera/plus icon
-          ctx.strokeStyle = '#998D7C';
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          // Camera box
-          ctx.rect(cx - 15, cy - 8, 30, 20);
-          // Camera lens
-          ctx.arc(cx, cy + 2, 6, 0, Math.PI * 2);
-          // Camera flash/prism
-          ctx.moveTo(cx - 8, cy - 8);
-          ctx.lineTo(cx - 5, cy - 12);
-          ctx.lineTo(cx + 5, cy - 12);
-          ctx.lineTo(cx + 8, cy - 8);
-          ctx.stroke();
-
-          // Plus sign overlay
-          ctx.strokeStyle = '#D1C9BE';
-          ctx.lineWidth = 2.5;
-          ctx.beginPath();
-          ctx.moveTo(cx - 24, cy - 18);
-          ctx.lineTo(cx - 16, cy - 18);
-          ctx.moveTo(cx - 20, cy - 22);
-          ctx.lineTo(cx - 20, cy - 14);
-          ctx.stroke();
-
-          ctx.fillStyle = '#948775';
-          ctx.font = 'bold 9px system-ui, -apple-system, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText('ADD IMAGE', cx, cy + 24);
-          ctx.restore();
-        }
-        break;
-      }
+      ctx.restore();
     }
   }
 
@@ -932,7 +367,7 @@ export function generateRollSideTexture(baseColor: string): HTMLCanvasElement {
 }
 
 /**
- * Generates beautiful desk textures procedurally based on user choice.
+ * Beautiful desk textures procedurally based on user choice.
  */
 export function generateDeskTexture(material: DeskMaterial): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
