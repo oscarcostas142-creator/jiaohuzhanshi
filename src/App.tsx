@@ -325,7 +325,7 @@ export default function App() {
                 <div className="lg:col-span-7 flex flex-col justify-start lg:pt-8 space-y-8 text-neutral-300 font-sans text-sm sm:text-base leading-relaxed tracking-wide">
                   <EditableTextBlock
                     id="chapter-01"
-                    defaultText={`"There is an unspoken infinity in a tape loop. A path that has no destination, only continuity."\n\nTraditional Japanese Washi tape provides an unparalleled tactile pleasure through its soft fibrous texture, beautiful ink absorption, and repetitive graphic layout. In this space, we translate that touch into a cinematic 3D digital laboratory.\n\nBy rolling tape continuously across a flat, warm canvas, we capture physical movement and freeze it into permanent vectors. It is not just drawing; it is compiling a temporal physical loop.`}
+defaultText={`图中纹样为传统经典长寿纹，提取自南京博物院馆藏清嘉庆《刺绣百寿字中堂》，是清代百寿图中极具代表性的寿字变体纹样，在明清织绣器物中大量运用。纹样以篆书“寿”字为基底纵向拉长塑形，整体竖长挺拔，横竖线条平直规整，结构对称均衡，保留篆刻拓印质朴斑驳的肌理质感；区别于圆形环抱的团寿纹，高挑舒展的造型直观呼应“长寿绵长”之意，连贯不断的笔画寓意福寿无尽、生生不息。百寿图集齐百款异形寿字，更有集齐百福、万寿齐全的深层祝福，这款简约大气的文字纹样，完美融合清代织绣工艺审美与中式吉祥文化内涵。`}
                   />
                   
                   <div className="h-[1px] bg-neutral-800 my-4" />
@@ -366,7 +366,7 @@ export default function App() {
                 <div className="lg:col-span-7 lg:pt-8">
                   <EditableTextBlock
                     id="chapter-02"
-                    defaultText={`01 / LEFT-CLICK & DRAG / CREATE PATHWAYS\nHold down the left mouse button and slide across the workspace. This pulls tape directly from the rolling washi cylinder, plotting path coordinates and applying your selected stamp graphics.\n\n02 / RIGHT-CLICK ON TAPE / CLOSE-UP ZOOM\nHover and right-click on any existing tape strip. The camera will instantly re-align directly over the clicked graphic, zooming in close so you can inspect delicate fibers and high-definition ink patterns without distortion.\n\n03 / RIGHT-CLICK AGAIN / RESTORE OVERVIEW\nSimply right-click anywhere on the scene while zoomed in to instantly restore the original oblique architectural perspective. No need to look for reset buttons.`}
+                    defaultText={`图中纹样是传统经典团寿纹，由篆书“寿”字艺术化重构而成，纹样雏形自唐末成型，在明清时期达到使用鼎盛，广泛用于篆刻印章、刺绣织物、陶瓷木雕等装饰。整体以规整正圆包裹对称平直的寿字骨架，线条连贯浑厚，自带篆刻拓印质朴斑驳的质感；圆形轮廓象征阖家圆满，连绵不绝的笔画寓意福寿绵长、万寿无疆。“寿”作为传统五福之首，承载着国人对健康长寿、平安顺遂的美好祈愿，时至今日，这款简约大气的文字纹样仍活跃在新中式文创、祝寿视觉设计中，是融合汉字书法与民俗祝福的经典国风符号。`}
                   />
                 </div>
               </section>
@@ -394,7 +394,7 @@ export default function App() {
                 <div className="lg:col-span-7 lg:pt-[104px] space-y-6 text-neutral-300 font-sans text-sm sm:text-base leading-relaxed">
                   <EditableTextBlock
                     id="chapter-03"
-                    defaultText={`Traditional rendering methods compress canvas textures to save memory, turning beautiful stamps into blurry pixels. To resolve this, we upgraded our canvas engine to support high-fidelity 8192px × 2048px resolutions.\n\nThis is coupled with WebGL's highest-quality image smoothing algorithms to ensure that even when you right-click and zoom in tightly onto a single stamp, the ink contours, deckle paper edges, and overlapping textures remain crisp, sharp, and perfectly undistorted.`}
+                    defaultText={`图中纹样是规整方直的篆体寿字纹，提取自南京博物院馆藏清嘉庆《刺绣百寿字中堂》，是清代百寿织绣中典型的方寿变体纹样。纹样以古篆书为基底重构，横竖线条平直利落，整体结构均衡对称，均匀留白让字形沉稳规整，红底白纹复刻出织绣拓印的古朴质感。不同于纵向修长的长寿纹、圆形包裹的团寿纹，方正轮廓寓意安稳长久，完整连贯的笔画象征福寿源源不断；寿居传统五福之首，整套百寿中堂汇集百种异形寿字，藏有百寿齐备、岁岁安康的祝福。纹样兼顾篆书书法美感与清代刺绣工艺特色，是承载祝寿祈愿的经典国风文字纹饰。`}
                   />
                   <div className="border border-neutral-800 p-6 bg-neutral-950">
                     <span className="font-mono text-[10px] tracking-widest text-neutral-500 uppercase block mb-3 font-bold">
@@ -445,7 +445,7 @@ export default function App() {
                 <div className="lg:col-span-7 lg:pt-[104px] space-y-6 text-neutral-300 font-sans text-sm sm:text-base leading-relaxed">
                   <EditableTextBlock
                     id="chapter-04"
-                    defaultText={`The word "Longevity" translates visually to endless repeating geometric ribbons that loop, cross over, and intertwine. This interactive exhibit mimics this infinity, treating tape lines as infinite equations winding around a centralized coordinate frame.\n\nEvery overlap is calculated in physical 3D space with subtle soft shadowing to mimic real-world paper thickness and layering. This creates a striking harmony between classic ink craft and modern visual computing.`}
+                    defaultText={`图中圆润篆体寿字纹样提取自南京博物院馆藏清嘉庆《刺绣百寿字中堂》，属于百寿图体系内柔和变体寿纹。纹样由古篆书寿字演化而来，线条宽厚饱满、转角全部做圆弧化处理，整体纵向舒展柔和，保留拓印般质朴斑驳的肌理质感。它区别于棱角分明的方寿纹、规整修长的长寿纹，柔和流畅的线条寓意福寿温润绵长，无尖锐折角的造型象征平安顺遂；寿位居传统五福之首，整套百寿织绣汇聚百种造型各异的寿字，承载百寿齐聚、延年安康的美好祈愿，纹样融合篆书书法韵味与清代刺绣工艺特征，是温婉雅致的传统祝寿吉祥纹饰。`}
                   />
                   
                   <div className="h-12" />
