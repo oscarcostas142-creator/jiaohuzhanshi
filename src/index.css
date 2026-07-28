@@ -1,0 +1,19 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+:root {
+  --desk-color: #FAF9F6;
+  --tape-base-color: #FCFAF7;
+  --stamp-red: #C83C3C;
+  --stamp-black: #2C2C2C;
+}
+
+@theme {
+  --font-sans: "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --color-desk: var(--desk-color);
+  --color-tape-base: var(--tape-base-color);
+  --color-stamp-red: var(--stamp-red);
+  --color-stamp-black: var(--stamp-black);
+}
