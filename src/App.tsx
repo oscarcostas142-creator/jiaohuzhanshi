@@ -22,30 +22,30 @@ export default function App() {
   const [showIntro, setShowIntro] = useState(false);
   const [uploadedImage1] = useState<string | null>(() => {
     try {
-      return localStorage.getItem('uploadedImage1') || DEFAULT_STAMPS[0];
+      return localStorage.getItem('uploadedImage1') || INTRO_IMAGES[0];
     } catch {
-      return DEFAULT_STAMPS[0];
+      return INTRO_IMAGES[0];
     }
   });
   const [uploadedImage2] = useState<string | null>(() => {
     try {
-      return localStorage.getItem('uploadedImage2') || DEFAULT_STAMPS[1];
+      return localStorage.getItem('uploadedImage2') || INTRO_IMAGES[1];
     } catch {
-      return DEFAULT_STAMPS[1];
+      return INTRO_IMAGES[1];
     }
   });
   const [uploadedImage3] = useState<string | null>(() => {
     try {
-      return localStorage.getItem('uploadedImage3') || DEFAULT_STAMPS[2];
+      return localStorage.getItem('uploadedImage3') || INTRO_IMAGES[2];
     } catch {
-      return DEFAULT_STAMPS[2];
+      return INTRO_IMAGES[2];
     }
   });
   const [uploadedImage4] = useState<string | null>(() => {
     try {
-      return localStorage.getItem('uploadedImage4') || DEFAULT_STAMPS[3];
+      return localStorage.getItem('uploadedImage4') || INTRO_IMAGES[3];
     } catch {
-      return DEFAULT_STAMPS[3];
+      return INTRO_IMAGES[3];
     }
   });
 
