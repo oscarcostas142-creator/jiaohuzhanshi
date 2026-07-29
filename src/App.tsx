@@ -4,6 +4,7 @@ import { TapeConfig } from './types';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, HelpCircle, RotateCcw, Camera } from 'lucide-react';
 import { DEFAULT_STAMPS } from './utils/defaultStamps';
+import { INTRO_IMAGES } from './utils/introImages';
 import { EditableTextBlock } from './components/EditableTextBlock';
 
 export default function App() {
